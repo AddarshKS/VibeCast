@@ -39,6 +39,7 @@ struct VisualTests {
                          directory: output, scheme: .light, height: 650)
         state.isDetached = false
         state.resetWindowSize()
+        state.selectPanel(.lyrics)
         state.windowHeight = 650
         for scheme in [ColorScheme.dark, .light] {
             try await render(MenuBarRootView(store: store, presentation: state),

@@ -246,7 +246,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             playerWindow = window
         }
         guard let window = playerWindow else { return }
-        playerPresentation.resetWindowSize(preservingLyricsFocus: true)
+        playerPresentation.resetWindowSize()
         window.contentViewController = hosting
         playerPresentation.isDetached = true
         updateMaximumHeight(on: screen)

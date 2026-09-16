@@ -14,7 +14,7 @@ A native macOS menu bar companion for Spotify. Find a playlist for a mood, confi
 - Lyrics and queue share a stable reading viewport. Reopening lyrics for the current song reuses the in-memory result; Refresh fetches it again.
 - Timed lyrics support click-to-seek. The sparkles button opens immersive **Lyrics Mode** with a ripple transition in both dropdown and pop-out presentations. Reading scrollbars are hidden, not scrolling itself.
 - Pop out the same player into a movable, normal-level window; it is not always on top. The menu bar icon brings that window forward. Returning to the menu bar immediately opens the dropdown.
-- Width stays fixed at 400 points. Only the detached standard view and Lyrics Mode resize vertically; normal lyrics and queue use locked heights. Popping out from dropdown Lyrics Mode preserves that mode and enables vertical resizing. Redocking resets custom sizes and returns to normal lyrics.
+- Width stays fixed at 400 points. Only the detached standard view and Lyrics Mode resize vertically; normal lyrics and queue use locked heights. Switching containers preserves the selected panel, Lyrics Mode, Advanced View, and draft. Redocking resets only custom sizes; active Lyrics Mode returns to the dropdown at its normal fixed lyrics height.
 - Queue selections currently advance through intervening songs sequentially. Direct jumping while preserving the queue remains deferred; do not describe this as an atomic jump.
 - Every playlist recommendation waits for **Sure!**. **Cast Magic** uses the original request to make a playlist.
 - The same actions are available in the menu bar when notifications are disabled.

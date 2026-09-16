@@ -173,6 +173,7 @@ struct MenuBarRootView: View {
                     .measureWandPosition("focused")
                 PlayerIconButton(title: presentation.isDetached ? "Return to menu bar" : "Open player window",
                                  symbol: presentation.isDetached ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                 active: presentation.isDetached,
                                  action: toggleWindow)
             }
             .padding(.horizontal, 20).padding(.vertical, 18)
@@ -225,6 +226,7 @@ struct MenuBarRootView: View {
             }
             PlayerIconButton(title: presentation.isDetached ? "Return to menu bar" : "Open player window",
                              symbol: presentation.isDetached ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                             active: presentation.isDetached,
                              action: toggleWindow)
             PlayerIconButton(title: "Settings", symbol: "slider.horizontal.3", action: openSettings)
             PlayerIconButton(title: "Quit VibeCast", symbol: "power") { NSApp.terminate(nil) }

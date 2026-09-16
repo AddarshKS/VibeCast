@@ -20,7 +20,7 @@ One player, two containers. Features belong to the shared player, not to a pop-o
 
 Keep only window-specific concerns conditional: resizing, dragging, dismissal, anchoring, activation, and surface decoration. Both containers use the height AppKit has allocated, rather than displaying a larger content layout before the native surface grows. Preserve this ordering when modifying layout.
 
-Detached standard view and Lyrics Mode can resize vertically, with a 405-point minimum subject to screen capacity. Queue and normal lyrics temporarily lock their height. Width stays at 400 points. Redocking resets custom sizes and Lyrics Mode focus; normal lyrics remains selected. Dropdown Lyrics Mode itself never enables resizing.
+Detached standard view and Lyrics Mode can resize vertically, with a 405-point minimum subject to screen capacity. Queue and normal lyrics temporarily lock their height. Width stays at 400 points. Redocking resets only custom sizes, preserving Lyrics Mode at the normal fixed dropdown lyrics height. Panel selection, Advanced View, and drafts also survive container changes. Dropdown Lyrics Mode itself never enables resizing.
 
 ## Request behavior today
 
@@ -61,7 +61,7 @@ Request routing, recommendation confirmation, playlist planning/catalog matching
 
 ## Verification and handoff
 
-The latest implementation passed the full Swift test run with visual rendering (runner reported 94 tests across 12 suites; environment-gated live/native tests are not all enabled in that run), plus all 10 tests in the separately enabled native presentation suite. The routing-only run passed four tests and the optional Node service passed nine tests. The installed bundle was verified running, and the owner confirmed the visual fix. Live AI playlist generation is not covered by those results.
+The latest implementation passed the full Swift test run with visual rendering (runner reported 95 tests across 12 suites; environment-gated live/native tests are not all enabled in that run), plus all 10 tests in the separately enabled native presentation suite, including repeated round trips that retain Lyrics Mode, panels, Advanced View, and draft text. The routing-only run passed four tests and the optional Node service passed nine tests at the preceding checkpoint. The installed bundle was verified running, and the owner confirmed the visual fix. Live AI playlist generation is not covered by those results.
 
 ```sh
 ./script/run_routing_checks.sh

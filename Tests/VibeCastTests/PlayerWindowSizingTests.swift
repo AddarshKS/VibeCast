@@ -50,7 +50,7 @@ struct PlayerWindowSizingTests {
         #expect(state.panel == .lyrics)
     }
 
-    @Test func returningToMenuBarResetsAllSizesAndFocusRequiresLyrics() {
+    @Test func returningToMenuBarResetsOnlySizesAndPreservesLyricsMode() {
         let state = PlayerPresentation()
         state.selectPanel(.lyrics)
         state.toggleLyricsFocus()
@@ -70,12 +70,30 @@ struct PlayerWindowSizingTests {
         #expect(state.standardHeight == nil)
         #expect(state.focusedHeight == nil)
         #expect(state.windowHeight == nil)
-        #expect(!state.lyricsFocused)
+        #expect(state.lyricsFocused)
+        #expect(state.layout == .focusedLyrics)
+        #expect(state.isHeightLocked)
         state.isDetached = true
         #expect(state.desiredHeight(natural: 480) == 480)
         state.selectPanel(.queue)
         state.toggleLyricsFocus()
         #expect(state.layout == .queue)
+    }
+
+    @Test func windowSizeResetDoesNotResetPanelsOrDeveloperView() {
+        let state = PlayerPresentation()
+        for panel in [nil, PlayerPanel.queue, .lyrics, .outputs] {
+            for advanced in [false, true] {
+                state.selectPanel(panel)
+                state.advanced = advanced
+                for detached in [true, false] {
+                    state.isDetached = detached
+                    state.resetWindowSize()
+                    #expect(state.panel == panel)
+                    #expect(state.advanced == advanced)
+                }
+            }
+        }
     }
 
     @Test func heightsStayInsideDisplayAndShareTheMinimum() {

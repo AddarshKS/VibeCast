@@ -35,11 +35,10 @@ final class PlayerPresentation: ObservableObject {
         lyricsFocused.toggle()
     }
 
-    func resetWindowSize(preservingLyricsFocus: Bool = false) {
+    func resetWindowSize() {
         standardHeight = nil
         focusedHeight = nil
         windowHeight = nil
-        if !preservingLyricsFocus { lyricsFocused = false }
     }
 
     func recordResize(_ height: CGFloat) {

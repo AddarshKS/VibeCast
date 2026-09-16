@@ -18,28 +18,10 @@ struct RaisedPlayerSurface: ViewModifier {
 struct LyricsModeButton: View {
     var active = false
     var action: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
-
-    private var title: String { active ? "Exit Lyrics Mode" : "Enter Lyrics Mode" }
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 16, weight: .medium))
-                .symbolRenderingMode(.monochrome)
-                .foregroundStyle(.primary)
-                .shadow(color: .primary.opacity(hovered ? 0.45 : 0), radius: 4)
-                .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(hovered ? 0.07 : 0),
-                            in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
-        .help(title).accessibilityLabel(title)
-        .accessibilityAddTraits(active ? .isSelected : [])
+        PlayerIconButton(title: active ? "Exit Lyrics Mode" : "Enter Lyrics Mode",
+                         symbol: "sparkles", active: active, symbolSize: 16, action: action)
     }
 }
 
@@ -48,6 +30,7 @@ struct PlayerIconButton: View {
     let symbol: String
     var active = false
     var pending = false
+    var symbolSize: CGFloat = 13
     var action: () -> Void
     @State private var hovered = false
 
@@ -57,7 +40,7 @@ struct PlayerIconButton: View {
                 Image(systemName: symbol).opacity(pending ? 0 : 1)
                 if pending { ProgressView().controlSize(.mini) }
             }
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: symbolSize, weight: .medium))
                 .foregroundStyle(active ? Color.teal : Color.primary.opacity(0.8))
                 .frame(width: 30, height: 30)
                 .background(active ? Color.teal.opacity(0.13) : Color.primary.opacity(hovered ? 0.07 : 0),

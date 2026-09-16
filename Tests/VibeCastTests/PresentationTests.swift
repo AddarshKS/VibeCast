@@ -75,9 +75,37 @@ struct PresentationTests {
         #expect(state.focusedHeight == 540)
         controller.returnToMenuBar()
         try await Task.sleep(for: .milliseconds(150))
-        #expect(state.layout == .lyrics)
+        #expect(state.layout == .focusedLyrics)
         #expect(state.focusedHeight == nil)
+        #expect(state.isHeightLocked)
+        #expect(controller.popover.contentSize.height == dropdownHeight)
+        #expect(controller.popover.contentViewController === host)
         #expect(controller.popover.isShown)
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(state.layout == .focusedLyrics)
+        #expect(player.frame.height == dropdownHeight)
+        #expect(player.styleMask.contains(.resizable))
+        controller.returnToMenuBar()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(state.layout == .focusedLyrics)
+
+        store.prompt = "Keep this draft through every presentation"
+        for panel in [nil, PlayerPanel.queue, .lyrics, .outputs] {
+            state.selectPanel(panel)
+            for advanced in [false, true] {
+                state.advanced = advanced
+                controller.togglePlayerWindow()
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(player.contentViewController === host)
+                #expect(state.panel == panel && state.advanced == advanced)
+                controller.returnToMenuBar()
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(controller.popover.contentViewController === host)
+                #expect(state.panel == panel && state.advanced == advanced)
+                #expect(store.prompt == "Keep this draft through every presentation")
+            }
+        }
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
