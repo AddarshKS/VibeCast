@@ -7,7 +7,7 @@ struct PromptComposerView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            TextField("What sounds good?", text: $store.prompt, axis: .vertical)
+            TextField("What's your vibe?", text: $store.prompt, axis: .vertical)
                 .font(.system(size: 13)).textFieldStyle(.plain)
                 .lineLimit(1...3).focused($focused)
                 .fixedSize(horizontal: false, vertical: true)
