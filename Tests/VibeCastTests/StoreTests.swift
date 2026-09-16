@@ -27,6 +27,7 @@ final class FakeSpotify: SpotifyServing {
     var playbackReply: CheckedContinuation<SpotifyPlayback?, Never>?
     var playbackReads = 0
     var queueValue: [SpotifyQueueItem] = []
+    var previousItems: [SpotifyTrack] = []
     var deviceValues: [SpotifyDevice] = []
     func devices() async throws -> [SpotifyDevice] { deviceValues }
     var queueFailure = false
@@ -71,6 +72,8 @@ final class FakeSpotify: SpotifyServing {
                     let next = queueValue.removeFirst()
                     item = SpotifyTrack(uri: next.uri, name: next.name, artists: next.artists ?? [], album: next.album, isPlayable: true)
                 }
+            case .rewindQueue:
+                if !previousItems.isEmpty { item = previousItems.removeLast() }
             default: break
             }
             playbackValue = SpotifyPlayback(isPlaying: playing, item: item, device: device,

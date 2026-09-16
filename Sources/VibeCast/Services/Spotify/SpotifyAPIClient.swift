@@ -82,6 +82,8 @@ final class SpotifyAPIClient: SpotifyServing {
         case .previous: try await send(method: "POST", path: "/me/player/previous")
         case .advanceQueue(_, let id):
             try await send(method: "POST", path: "/me/player/next", query: ["device_id": id])
+        case .rewindQueue(_, let id):
+            try await send(method: "POST", path: "/me/player/previous", query: ["device_id": id])
         case .seek(let position, let uri):
             guard let current = try await playback(), current.item?.uri == uri,
                   let duration = current.item?.durationMS, position >= 0, position < duration,

@@ -1,5 +1,7 @@
 # VibeCast Project Status
 
+Experimental branch note: `codex/compact-dropdown-experiment` uses the same 340-point compact layout in both containers. It adds the right-click settings/status menu, landing-only request field, shared miniplayer with artwork tint, and manual resizing restricted to detached Lyrics Mode (344-point minimum). The latest refinements include symmetric queue pull-and-snap navigation, stable opening alignment, a sweeping composer hover glow, and a Lyrics Mode hover pulse that becomes a steady highlight while active. Five-song session-local history sits above Up Next. The accepted baseline described below is unchanged on `codex/public-beta`; see [experiment scope and verification](COMPACT_DROPDOWN_EXPERIMENT.md).
+
 Updated September 16, 2026.
 
 ## Accepted baseline

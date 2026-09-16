@@ -17,6 +17,7 @@ final class VibeCastStore: ObservableObject {
     private var accountID: String?
     private var pending: [PendingPlaylistRecommendation]
     private var startupTask: Task<Void, Never>?
+    private var subscriptionRestoreTask: Task<Void, Never>?
     private var work: Task<Void, Never>?
     private var operationID = UUID()
     private var accountGeneration = UUID()
@@ -34,10 +35,13 @@ final class VibeCastStore: ObservableObject {
     @Published private(set) var isPlayerControl = false
     @Published private(set) var pendingPlayerAction: SpotifyAction?
     @Published private(set) var pendingQueueIndex: Int?
+    @Published private(set) var pendingHistoryIndex: Int?
     var showsRequestProgress: Bool { isBusy && !isPlayerControl }
     @Published private(set) var progress = ""
     @Published private(set) var notificationNotice: String?
-    @Published private(set) var playback: SpotifyPlayback?
+    @Published private(set) var playback: SpotifyPlayback? {
+        didSet { playerDetails.observePlayback(playback) }
+    }
     private(set) var playbackUpdatedAt = Date()
     @Published private(set) var playbackRefreshFailed = false
     @Published private(set) var lastRouteName: String?
@@ -78,7 +82,13 @@ final class VibeCastStore: ObservableObject {
         if startAutomatically {
             NotificationActionRouter.shared.register(store: self)
             startupTask = Task { await refreshAuthState() }
+            restoreSubscriptionIfNeeded()
         }
+    }
+
+    private func restoreSubscriptionIfNeeded() {
+        guard settings.aiProvider == .chatGPT else { return }
+        subscriptionRestoreTask = Task { [chatGPT] in await chatGPT.refresh() }
     }
 
     func refreshAuthState() async {
@@ -159,6 +169,7 @@ final class VibeCastStore: ObservableObject {
             if !key.isEmpty { try secrets.write(Data(key.utf8), account: "openai.api-key") }
             settings.spotifyClientID = value.clientID
             settings.serviceAddress = value.serviceAddress
+            let providerChanged = settings.aiProvider != value.provider || settings.codexExecutable != value.codexExecutable
             settings.codexExecutable = value.codexExecutable
             settings.openAIModel = value.model
             settings.aiProvider = value.provider
@@ -166,6 +177,7 @@ final class VibeCastStore: ObservableObject {
             settings.aiConsent = value.aiConsent
             settings.notificationsEnabled = value.notificationsEnabled
             settings.lyricsEnabled = value.lyricsEnabled
+            if providerChanged { restoreSubscriptionIfNeeded() }
             latestError = nil
             return true
         } catch { fail(error); return false }
@@ -197,6 +209,7 @@ final class VibeCastStore: ObservableObject {
         isPlayerControl = false
         pendingPlayerAction = nil
         pendingQueueIndex = nil
+        pendingHistoryIndex = nil
         playbackRefreshID = UUID()
         progress = ""
         requestState = .idle
@@ -242,18 +255,29 @@ final class VibeCastStore: ObservableObject {
     }
 
     func playQueueItem(at index: Int, in displayedItems: [SpotifyQueueItem]) {
+        playListItem(at: index, in: displayedItems, list: .upcoming)
+    }
+
+    func playListItem(at index: Int, in displayedItems: [SpotifyQueueItem], list: PlayerList) {
         guard authState.isLoggedIn, !isBusy, displayedItems.indices.contains(index), index < 20,
               displayedItems[index].playableTrack != nil else { return }
-        let requested = Array(displayedItems.prefix(index + 1))
+        let requested = list == .upcoming ? Array(displayedItems.prefix(index + 1)) : Array(displayedItems[index...].reversed())
+        let displayedCurrentURI = playback?.item?.uri
+        if list == .history {
+            guard displayedItems.map(\.uri) == playerDetails.recentlyPlayed.map(\.uri) else { return }
+        }
         playbackRefreshID = UUID()
-        pendingQueueIndex = index
-        run(prompt: "Play queued song: \(displayedItems[index].name)", route: .directSpotify(.next), showFeedback: false) {
+        if list == .upcoming { pendingQueueIndex = index } else { pendingHistoryIndex = index }
+        run(prompt: "Play listed song: \(displayedItems[index].name)", route: .directSpotify(list == .upcoming ? .next : .previous), showFeedback: false) {
             do {
                 try Task.checkCancellation()
                 guard let initial = try await self.spotify.playback(), initial.isPlaying,
                       let initialURI = initial.item?.uri, let device = initial.device,
                       let deviceID = device.id, device.isRestricted != true else {
                     throw UserFacingError("Resume Spotify on your device before choosing a queued song.")
+                }
+                guard list == .upcoming || initialURI == displayedCurrentURI else {
+                    throw UserFacingError("Spotify's song changed. Refresh the history and choose the song again.")
                 }
                 let path = [initialURI] + requested.map(\.uri)
                 guard requested.allSatisfy({ $0.playableTrack != nil }),
@@ -265,15 +289,21 @@ final class VibeCastStore: ObservableObject {
                     if step > 0 { try await Task.sleep(for: self.controlConfirmationDelay) }
                     try Task.checkCancellation()
                     let remaining = requested.dropFirst(step).map(\.uri)
-                    let currentQueue = try await self.spotify.queue()
-                    guard Array(currentQueue.prefix(remaining.count).map(\.uri)) == remaining,
-                          let current = try await self.spotify.playback(), current.isPlaying,
+                    if list == .upcoming {
+                        let currentQueue = try await self.spotify.queue()
+                        guard Array(currentQueue.prefix(remaining.count).map(\.uri)) == remaining else {
+                            throw UserFacingError("Spotify's queue or player changed. Refresh the queue and choose the song again.")
+                        }
+                    }
+                    guard let current = try await self.spotify.playback(), current.isPlaying,
                           current.item?.uri == previousURI, current.device?.id == deviceID,
-                          current.actions?.disallows?["skipping_next"] != true else {
+                          current.actions?.disallows?[list == .upcoming ? "skipping_next" : "skipping_prev"] != true else {
                         throw UserFacingError("Spotify's queue or player changed. Refresh the queue and choose the song again.")
                     }
                     try Task.checkCancellation()
-                    let action = SpotifyAction.advanceQueue(trackURI: requested[step].uri, deviceID: deviceID)
+                    let action: SpotifyAction = list == .upcoming
+                        ? .advanceQueue(trackURI: requested[step].uri, deviceID: deviceID)
+                        : .rewindQueue(trackURI: requested[step].uri, deviceID: deviceID)
                     self.pendingPlayerAction = action
                     self.lastSpotifyAction = "Queue step \(step + 1) of \(requested.count)"
                     _ = try await self.spotify.execute(action)
@@ -450,6 +480,7 @@ final class VibeCastStore: ObservableObject {
                     self.isBusy = false; self.isPlayerControl = false; self.progress = ""; self.work = nil
                     self.pendingPlayerAction = nil
                     self.pendingQueueIndex = nil
+                    self.pendingHistoryIndex = nil
                     self.noteInteraction()
                 }
             }

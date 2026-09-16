@@ -26,8 +26,9 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(height: 30)
                     .background(SettingsDragRegion())
-                Button { if let close { close() } else { dismiss() } } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
-                    .buttonStyle(.borderless).help("Close settings").accessibilityLabel("Close settings")
+                PlayerIconButton(title: "Close settings", symbol: "xmark") {
+                    if let close { close() } else { dismiss() }
+                }
             }
             .padding(20)
             Form {
@@ -115,6 +116,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 500, idealWidth: 520, maxWidth: .infinity, minHeight: 620, idealHeight: 680, maxHeight: .infinity)
         .modifier(SettingsGlass())
+        .modifier(SettingsFirstClick())
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)).allowsHitTesting(false))
         .tint(.teal)

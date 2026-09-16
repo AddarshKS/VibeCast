@@ -2,8 +2,8 @@ import SwiftUI
 
 enum PanelSizing {
     static func bodyHeight(content: CGFloat, top: CGFloat, bottom: CGFloat, maximum: CGFloat,
-                           readingPanel: Bool = false) -> CGFloat {
-        min(max(0, readingPanel ? 320 : content), max(0, maximum - top - bottom))
+                           readingPanel: Bool = false, readingHeight: CGFloat = 320) -> CGFloat {
+        min(max(0, readingPanel ? readingHeight : content), max(0, maximum - top - bottom))
     }
 }
 

@@ -7,6 +7,162 @@ import Testing
 @Suite(.serialized)
 struct VisualTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func queueHeaderStaysAlignedThroughoutOpeningAndRefresh() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        for index in 0..<6 {
+            api.playbackValue = SpotifyPlayback(isPlaying: true,
+                item: SpotifyTrack(uri: "spotify:track:h\(index)", name: "History \(index)",
+                                   artists: [], album: nil, isPlayable: true),
+                device: nil, shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+        }
+        for detached in [false, true] {
+            let state = PlayerPresentation()
+            state.isDetached = detached
+            state.windowHeight = 544
+            let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state))
+            host.sizingOptions = []
+            host.safeAreaRegions = []
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 544),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = host
+            defer { window.contentView = nil }
+            try await Task.sleep(for: .milliseconds(100))
+            withAnimation(.easeOut(duration: 0.2)) { state.selectPanel(.queue) }
+            var samples = 0
+            for _ in 0..<25 {
+                try await Task.sleep(for: .milliseconds(16))
+                host.layoutSubtreeIfNeeded()
+                if let marker = queueMarker(in: host), let scroll = marker.enclosingScrollView,
+                   let document = scroll.documentView {
+                    let anchor = marker.convert(marker.bounds, to: document).minY
+                    #expect(abs(anchor - scroll.contentView.bounds.minY) < 1,
+                            "Up Next must start and remain at its final snapped position during the opening fade.")
+                    samples += 1
+                }
+            }
+            #expect(samples > 15)
+        }
+    }
+
+    private func queueMarker(in view: NSView) -> QueueScrollBehavior.Marker? {
+        if let marker = view as? QueueScrollBehavior.Marker { return marker }
+        return view.subviews.lazy.compactMap { queueMarker(in: $0) }.first
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func growingHistoryPreservesUpcomingPositionAndNeverFocusesComposerOnOpen() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        let state = PlayerPresentation()
+        state.windowHeight = 544
+        let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state))
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 544),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!(window.firstResponder is NSTextView), "Opening the player must not start editing the request.")
+        state.selectPanel(.queue)
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        let scroll = try #require(scrollViews(in: host).first)
+        var previousOffset: CGFloat = 0
+        for index in 0...6 {
+            api.playbackValue = SpotifyPlayback(isPlaying: true,
+                item: SpotifyTrack(uri: "spotify:track:n\(index)", name: "Song \(index)", artists: [], album: nil, isPlayable: true),
+                device: nil, shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+            try await Task.sleep(for: .milliseconds(120))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+            let offset = scroll.contentView.bounds.minY
+            if index > 0 && index <= 5 { #expect(offset > previousOffset + 30, "New history must stay above Up Next, not move into view.") }
+            if index == 6 { #expect(abs(offset - previousOffset) < 1, "Rolling five-song history must not move the viewport.") }
+            previousOffset = offset
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func queueOpensBelowHistoryEvenWithNoUpcomingSongsAndResetsOnReopen() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        for index in 1...6 {
+            api.playbackValue = SpotifyPlayback(isPlaying: true,
+                item: SpotifyTrack(uri: "spotify:track:\(index)", name: "History song \(index)",
+                                   artists: [.init(name: "Test Artist")], album: nil, isPlayable: true),
+                device: nil, shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+        }
+        #expect(store.playerDetails.recentlyPlayed.count == 5)
+        for detached in [false, true] {
+            let state = PlayerPresentation()
+            state.isDetached = detached
+            state.selectPanel(.queue)
+            state.windowHeight = 544
+            let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state))
+            host.sizingOptions = []
+            host.safeAreaRegions = []
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 544),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = host
+            defer { window.contentView = nil }
+            try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
+            let scroll = try #require(scrollViews(in: host).first)
+            #expect(scroll.contentView.bounds.minY > 200, "History must start above the viewport, even for an empty Up Next list.")
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            #expect(scroll.contentView.bounds.minY < 1)
+            state.selectPanel(nil)
+            try await Task.sleep(for: .milliseconds(100))
+            state.selectPanel(.queue)
+            try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
+            let reopened = try #require(scrollViews(in: host).first)
+            #expect(reopened.contentView.bounds.minY > 200, "Reopening must return to Up Next, not the previous history position.")
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func compactLandingKeepsPlayerAndComposerVisibleAtItsFixedHeight() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        let track = SpotifyTrack(uri: "spotify:track:test", name: "A Very Long Evening Song Title That Wraps Across Two Lines",
+                                 artists: [.init(name: "The Test Band")], album: nil, isPlayable: true, durationMS: 213000)
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        let state = PlayerPresentation()
+        state.isDetached = true
+        let landingHeight: CGFloat = 418
+        state.windowHeight = landingHeight
+        var sections: [String: CGFloat] = [:]
+        let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state)
+            .onPreferenceChange(PanelMeasurements.self) { sections = $0 })
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PlayerPresentation.width,
+                                                  height: landingHeight),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        for prompt in ["", "Find me something calm for tonight\nWith acoustic guitars and soft vocals\nAnd a little instrumental piano"] {
+            store.prompt = prompt
+            try await Task.sleep(for: .milliseconds(200))
+            host.layoutSubtreeIfNeeded()
+            let top = try #require(sections["top"])
+            let bottom = try #require(sections["bottom"])
+            #expect(top + bottom + 20 <= landingHeight,
+                    "The player, multiline composer, and a scrollable response area must fit the fixed landing window.")
+            #expect(host.bounds.width == 340)
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
     func lyricsStartAtTopThenFollowTheCenterAndResetAfterSeekingBack() async throws {
         _ = NSApplication.shared
         let (store, api, _, _, _) = try await StoreTests().fixture()
@@ -31,6 +187,7 @@ struct VisualTests {
             defer { window.contentView = nil }
             await position(0)
             try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
             let scroll = try #require(scrollViews(in: host).first)
             #expect(abs(scroll.documentVisibleRect.minY) < 1, "Opening lyrics must not scroll or leave a centered first line.")
             await position(4000)
@@ -65,15 +222,16 @@ struct VisualTests {
         let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state))
         host.sizingOptions = []
         host.safeAreaRegions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 680),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 680),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = host
         defer { window.contentView = nil }
         for detached in [false, true] {
             state.isDetached = detached
-            for height in [600.0, 650, 680] {
+            let density = PlayerPresentation.density
+            for height in [500.0, 550, 680] {
                 state.windowHeight = height
-                window.setContentSize(NSSize(width: 400, height: height))
+                window.setContentSize(NSSize(width: density.width, height: height))
                 try await Task.sleep(for: .milliseconds(150))
                 host.layoutSubtreeIfNeeded()
                 let scrolls = scrollViews(in: host)
@@ -82,7 +240,7 @@ struct VisualTests {
                 #expect(document.frame.height <= outer.contentView.bounds.height + 1,
                         "The floating sync control must fit inside the lyrics panel at height \(height).")
                 let lyricsScroll = try #require(scrolls.dropFirst().first)
-                let allocatedLyricsHeight = min(250, max(0, outer.contentView.bounds.height - 56))
+                let allocatedLyricsHeight = max(0, outer.contentView.bounds.height - density.lyricsReserve)
                 #expect(abs(lyricsScroll.frame.height - allocatedLyricsHeight) < 1,
                         "Lyrics must use the full allocated height, with no reserved sync-button row.")
             }
@@ -103,18 +261,18 @@ struct VisualTests {
         await store.playerDetails.loadLyrics(for: PlayerTests.track, enabled: true)
         let state = PlayerPresentation()
         state.isDetached = true
-        state.recordResize(405)
+        state.recordResize(390)
         try await render(MenuBarRootView(store: store, presentation: state), name: "compact-player-dark",
-                         directory: output, scheme: .dark, height: 405)
+                         directory: output, scheme: .dark, height: 390)
         state.selectPanel(.lyrics)
-        state.windowHeight = 680
+        state.windowHeight = 574
         for scheme in [ColorScheme.dark, .light] {
             try await render(MenuBarRootView(store: store, presentation: state),
                              name: "detached-lyrics-hint-\(scheme)", directory: output,
-                             scheme: scheme, height: 680)
+                             scheme: scheme, height: 574)
         }
         state.toggleLyricsFocus()
-        for height in [405.0, 650] {
+        for height in [344.0, 390, 650] {
             state.recordResize(height)
             try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-\(Int(height))-dark",
                              directory: output, scheme: .dark, height: height)
@@ -124,13 +282,13 @@ struct VisualTests {
         state.isDetached = false
         state.resetWindowSize()
         state.selectPanel(.lyrics)
-        state.windowHeight = 650
+        state.windowHeight = 550
         for scheme in [ColorScheme.dark, .light] {
             try await render(MenuBarRootView(store: store, presentation: state),
-                             name: "popover-lyrics-\(scheme)", directory: output, scheme: scheme, height: 650)
+                             name: "popover-lyrics-\(scheme)", directory: output, scheme: scheme, height: 550)
             state.toggleLyricsFocus()
             try await render(MenuBarRootView(store: store, presentation: state),
-                             name: "popover-focused-lyrics-\(scheme)", directory: output, scheme: scheme, height: 650)
+                             name: "popover-focused-lyrics-\(scheme)", directory: output, scheme: scheme, height: 550)
             state.toggleLyricsFocus()
         }
         api.playbackValue = SpotifyPlayback(isPlaying: false, item: PlayerTests.track, device:
@@ -138,10 +296,10 @@ struct VisualTests {
             shuffleState: false, repeatState: "off", progressMS: 0)
         await store.refreshPlayback()
         try await render(MenuBarRootView(store: store, presentation: state), name: "lyrics-song-start-dark",
-                         directory: output, scheme: .dark, height: 650)
+                         directory: output, scheme: .dark, height: 550)
         state.toggleLyricsFocus()
         try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-song-start-dark",
-                         directory: output, scheme: .dark, height: 650)
+                         directory: output, scheme: .dark, height: 550)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
@@ -152,12 +310,12 @@ struct VisualTests {
                                            shuffleState: false, repeatState: "off")
         await store.refreshPlayback()
         let state = PlayerPresentation()
-        state.windowHeight = 500
+        state.windowHeight = 420
         var requestedHeight: CGFloat = 0
         let host = NSHostingView(rootView: MenuBarRootView(store: store, resize: { requestedHeight = $0 }, presentation: state))
         host.sizingOptions = []
         host.safeAreaRegions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 420),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = host
         defer { window.contentView = nil }
@@ -167,16 +325,16 @@ struct VisualTests {
         for panel in [PlayerPanel.queue, .lyrics] {
             state.selectPanel(panel)
             try await Task.sleep(for: .milliseconds(100))
-            #expect(requestedHeight > 500)
-            #expect(abs(outer.frame.height - originalHeight) < 1,
-                    "A newly opened reading panel must not outgrow the old native surface before the resize.")
-            window.setContentSize(NSSize(width: 400, height: requestedHeight))
+            #expect(requestedHeight > 420)
+            #expect(outer.frame.height <= originalHeight + 61,
+                    "Before native resizing, detail content can reclaim the 60pt composer but must not outgrow the surface.")
+            window.setContentSize(NSSize(width: 340, height: requestedHeight))
             state.windowHeight = requestedHeight
             try await Task.sleep(for: .milliseconds(100))
             #expect(outer.frame.height > originalHeight)
             state.selectPanel(nil)
-            window.setContentSize(NSSize(width: 400, height: 500))
-            state.windowHeight = 500
+            window.setContentSize(NSSize(width: 340, height: 420))
+            state.windowHeight = 420
             try await Task.sleep(for: .milliseconds(100))
         }
     }
@@ -192,21 +350,21 @@ struct VisualTests {
             .background(Color.black).environment(\.colorScheme, .dark))
         host.sizingOptions = []
         host.safeAreaRegions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 680),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 680),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = host
         defer { window.contentView = nil }
         // Deliberately retain an oversized native window, as happens for one frame
         // when a detail panel closes, a response arrives, or the composer shrinks.
         for height in [680.0, 550, 680] {
-            window.setContentSize(NSSize(width: 400, height: height))
+            window.setContentSize(NSSize(width: 340, height: height))
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(80))
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
-            let scale = CGFloat(bitmap.pixelsWide) / 400
+            let scale = CGFloat(bitmap.pixelsWide) / 340
             let topInk = (0..<Int(100 * scale)).first { y in
-                (Int(20 * scale)..<Int(160 * scale)).filter { x in
+                (Int(100 * scale)..<Int(240 * scale)).filter { x in
                     guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
                     return c.redComponent > 0.7 && c.greenComponent > 0.7 && c.blueComponent > 0.7
                 }.count > Int(8 * scale)
@@ -243,6 +401,16 @@ struct VisualTests {
         presentation.selectPanel(nil)
         try await render(MenuBarRootView(store: store, presentation: presentation),
                          name: "detached-ready-light", directory: output, scheme: .light)
+        presentation.toggleMiniplayer()
+        for detached in [false, true] {
+            presentation.isDetached = detached
+            for scheme in [ColorScheme.dark, .light] {
+                try await render(MenuBarRootView(store: store, presentation: presentation),
+                                 name: "miniplayer-\(detached ? "window" : "dropdown")-\(scheme)",
+                                 directory: output, scheme: scheme)
+            }
+        }
+        presentation.toggleMiniplayer()
         try await render(MenuBarRootView(store: store, panel: .queue), name: "queue-dark", directory: output, scheme: .dark)
         try await render(MenuBarRootView(store: store, panel: .outputs), name: "devices-dark", directory: output, scheme: .dark)
         try await render(MenuBarRootView(store: store, panel: .lyrics), name: "lyrics-consent-dark", directory: output, scheme: .dark)
@@ -250,7 +418,7 @@ struct VisualTests {
         store.settings.lyricsEnabled = true
         await lyrics.loadLyrics(for: PlayerTests.track, enabled: true)
         try await render(ScrollView {
-            PlayerDetailsView(store: store, details: lyrics, settings: store.settings, panel: .lyrics, close: {}).padding(20)
+            PlayerDetailsView(store: store, details: lyrics, settings: store.settings, panel: .lyrics).padding(20)
         }.scrollIndicators(.never), name: "lyrics-text-dark", directory: output, scheme: .dark, height: 300)
         let timed = try #require(TimedLyrics(lrc: "[00:00.00]An open road\n[00:30.00]A quiet sky\n[01:00.00]The evening takes its time\n[01:20.00]A little light\n[01:30.00]A passing train\n[02:00.00]And we are home again"))
         try await render(SyncedLyricsView(store: store, lyrics: timed, trackURI: PlayerTests.track.uri).padding(20),
@@ -286,7 +454,8 @@ struct VisualTests {
     }
 
     private func render<V: View>(_ view: V, name: String, directory: URL, scheme: ColorScheme,
-                                 width: CGFloat = 400, height: CGFloat? = nil, minimumColors: Int = 30) async throws {
+                                 width: CGFloat? = nil, height: CGFloat? = nil, minimumColors: Int = 30) async throws {
+        let width = width ?? (view is MenuBarRootView ? PlayerPresentation.width : 400)
         let content = view.frame(width: width, height: height, alignment: .top)
             .background(scheme == .dark ? Color(white: 0.12) : Color(white: 0.98))
             .environment(\.colorScheme, scheme)
@@ -302,6 +471,7 @@ struct VisualTests {
         #expect(fittedHeight > 0 && fittedHeight <= 680)
         window.setContentSize(NSSize(width: width, height: fittedHeight))
         host.frame = NSRect(x: 0, y: 0, width: width, height: fittedHeight)
+        try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
         if name.contains("lyrics") || name.contains("queue") {
             for scroll in scrollViews(in: host) {

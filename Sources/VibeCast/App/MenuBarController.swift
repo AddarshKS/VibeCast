@@ -12,18 +12,22 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private(set) var playerWindow: NSWindow?
     private(set) var anchorWindow: NSPanel?
     private var hosting: NSHostingController<MenuBarRootView>!
-    private var playerHeight: CGFloat = 462
+    private var playerHeight: CGFloat = 420
     private var lastPlayerFrame: NSRect?
     private(set) var settingsWindow: NSWindow?
     private var pendingPopoverHeight: CGFloat?
     private var resizeScheduled = false
     private var interactionMonitor: Any?
     private var presentationObserver: AnyCancellable?
+    private var subscriptionObserver: AnyCancellable?
+    private weak var statusMenu: NSMenu?
     private var adjustingWindow = false
     private var lastPopoverAnchor: NSRect?
     private var outsideClickMonitor: Any?
     private var popoverEventMonitor: Any?
     private var deactivateObserver: NSObjectProtocol?
+    private var settingsActivationObserver: NSObjectProtocol?
+    private var settingsNeedsActivation = false
     private var spaceChangeObserver: NSObjectProtocol?
 
     var isMonitoringPopoverDismissal: Bool { popoverEventMonitor != nil && outsideClickMonitor != nil }
@@ -38,8 +42,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             button.toolTip = "VibeCast"
             button.setAccessibilityLabel("VibeCast")
             button.target = self
-            button.action = #selector(togglePopover)
-            button.sendAction(on: .leftMouseDown)
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
         // The stable fullscreen anchor is not the status button. Own dismissal
         // so AppKit cannot close on mouse-down and reopen on the button action.
@@ -49,7 +53,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         hosting = NSHostingController(rootView:
             MenuBarRootView(store: store,
                             resize: { [weak self] height in self?.resizePopover(height) },
-                            openSettings: { [weak self] in self?.showSettings() },
                             presentation: playerPresentation,
                             toggleWindow: { [weak self] in self?.togglePlayerWindow() }))
         // The measured SwiftUI height drives NSPopover; automatic hosting constraints
@@ -57,10 +60,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         hosting.sizingOptions = []
         hosting.safeAreaRegions = []
         popover.contentViewController = hosting
-        popover.contentSize = NSSize(width: 400, height: 462)
+        popover.contentSize = NSSize(width: PlayerPresentation.width, height: playerHeight)
         playerPresentation.windowHeight = popover.contentSize.height
         presentationObserver = playerPresentation.$panel
             .combineLatest(playerPresentation.$lyricsFocused, playerPresentation.$advanced)
+            .combineLatest(playerPresentation.$miniplayer)
             .dropFirst()
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -74,6 +78,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             return event
         }
         installMenus()
+        settingsActivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: NSApp, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.focusSettingsIfPending() }
+        }
+        subscriptionObserver = store.chatGPT.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in self?.updateSubscriptionMenuItem() }
+        }
     }
 
     private func resizePopover(_ height: CGFloat) {
@@ -101,7 +113,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
                 context.allowsImplicitAnimation = false
-                self.popover.contentSize = NSSize(width: 400, height: height)
+                self.popover.contentSize = NSSize(width: PlayerPresentation.width, height: height)
                 // Preserve the position chosen when shown. Resetting positioningRect
                 // during a height change makes AppKit choose a new horizontal origin.
                 if let window, let previousFrame {
@@ -179,7 +191,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         // The status button owns its toggle. Never close here and then deliver
         // the same click to a button that would reopen the popover.
-        if event.type == .leftMouseDown, let buttonWindow = statusItem.button?.window,
+        if [.leftMouseDown, .rightMouseDown].contains(event.type), let buttonWindow = statusItem.button?.window,
            event.window === buttonWindow { return event }
         let contentWindow = popover.contentViewController?.view.window
         var target = event.window
@@ -220,6 +232,82 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.contentViewController?.view.window?.makeKey()
     }
 
+    @objc private func statusItemClicked() {
+        if let event = NSApp.currentEvent,
+           event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
+            guard let button = statusItem.button, let window = button.window else { return }
+            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            popover.performClose(nil)
+            button.highlight(true)
+            defer { button.highlight(false) }
+            makeStatusMenu().popUp(positioning: nil, at: Self.statusMenuOrigin(below: anchor), in: nil)
+        } else { togglePopover() }
+    }
+
+    // Screen coordinates avoid the status button's flipped local coordinate system.
+    static func statusMenuOrigin(below anchor: NSRect) -> NSPoint {
+        NSPoint(x: anchor.minX, y: anchor.minY - 6)
+    }
+
+    // Build on opening so connection indicators and the view checkmark are current.
+    func makeStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (title, symbol, action) in [
+            ("Advance Mode View", "terminal", #selector(toggleAdvancedView)),
+            ("Settings", "slider.horizontal.3", #selector(showSettings)),
+            ("Quit VibeCast", "power", #selector(quitVibeCast)),
+            ("Contact Us!", "envelope", #selector(contactUs))
+        ] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
+        menu.items.first?.state = playerPresentation.advanced ? .on : .off
+        menu.addItem(.separator())
+        menu.addItem(connectionItem("Spotify", connected: store.authState.isLoggedIn))
+        if store.settings.aiProvider == .chatGPT {
+            let item = NSMenuItem()
+            item.identifier = NSUserInterfaceItemIdentifier("openai-status")
+            menu.addItem(item)
+        }
+        statusMenu = menu
+        updateSubscriptionMenuItem()
+        return menu
+    }
+
+    private func updateSubscriptionMenuItem() {
+        guard let item = statusMenu?.items.first(where: { $0.identifier?.rawValue == "openai-status" }) else { return }
+        let session = store.chatGPT
+        let connected: Bool? = session.account != nil ? true : (session.hasCheckedAccount ? false : nil)
+        let replacement = connectionItem("OpenAI", connected: connected)
+        item.title = connected == nil && session.error != nil ? "OpenAI Connection Unavailable" : replacement.title
+        item.image = replacement.image
+        item.isEnabled = false
+    }
+
+    private func connectionItem(_ service: String, connected: Bool?) -> NSMenuItem {
+        let status = connected.map { $0 ? "Connected" : "Disconnected" } ?? "Checking Connection"
+        let item = NSMenuItem(title: "\(service) \(status)", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { _ in
+            (connected.map { $0 ? NSColor.systemGreen : NSColor.systemRed } ?? NSColor.secondaryLabelColor).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 3, y: 3, width: 8, height: 8)).fill()
+            return true
+        }
+        return item
+    }
+
+    @objc func toggleAdvancedView() {
+        playerPresentation.toggleAdvanced()
+        if playerPresentation.isDetached { bringPlayerForward() }
+        else if !popover.isShown { togglePopover() }
+    }
+
+    static let contactURL = URL(string: "mailto:addarshshrivastava@gmail.com")!
+    @objc private func contactUs() { NSWorkspace.shared.open(Self.contactURL) }
+    @objc private func quitVibeCast() { NSApp.terminate(nil) }
+
     func togglePlayerWindow() {
         if playerPresentation.isDetached { returnToMenuBar() } else { detachPlayer() }
     }
@@ -232,7 +320,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         anchorWindow?.orderOut(nil)
         popover.contentViewController = nil
         if playerWindow == nil {
-            let window = PlayerWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: playerHeight),
+            let window = PlayerWindow(contentRect: NSRect(x: 0, y: 0, width: PlayerPresentation.width, height: playerHeight),
                                       styleMask: [.borderless, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "VibeCast"
             window.isReleasedWhenClosed = false
@@ -252,12 +340,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         updateMaximumHeight(on: screen)
         let height = playerPresentation.desiredHeight(natural: playerHeight)
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        let origin = lastPlayerFrame?.origin ?? sourceFrame.map { NSPoint(x: $0.midX - 200, y: $0.maxY - playerHeight - 12) }
-            ?? NSPoint(x: visible.midX - 200, y: visible.midY - playerHeight / 2)
+        let origin = lastPlayerFrame?.origin ?? sourceFrame.map { NSPoint(x: $0.midX - PlayerPresentation.width / 2, y: $0.maxY - height - 12) }
+            ?? NSPoint(x: visible.midX - PlayerPresentation.width / 2, y: visible.midY - height / 2)
         adjustingWindow = true
-        window.minSize = NSSize(width: 400, height: min(PlayerPresentation.minimumHeight, playerPresentation.maximumHeight))
-        window.maxSize = NSSize(width: 400, height: playerPresentation.maximumHeight)
-        window.setFrame(Self.constrainedFrame(NSRect(origin: origin, size: NSSize(width: 400, height: height)), to: screen),
+        window.minSize = NSSize(width: PlayerPresentation.width, height: 1)
+        window.maxSize = NSSize(width: PlayerPresentation.width, height: playerPresentation.maximumHeight)
+        window.setFrame(Self.constrainedFrame(NSRect(origin: origin, size: NSSize(width: PlayerPresentation.width, height: height)), to: screen),
                         display: false)
         adjustingWindow = false
         resizePlayerWindow(window, naturalHeight: playerHeight)
@@ -273,7 +361,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         playerPresentation.isDetached = false
         playerPresentation.resetWindowSize()
         popover.contentViewController = hosting
-        popover.contentSize = NSSize(width: 400, height: playerHeight)
+        popover.contentSize = NSSize(width: PlayerPresentation.width, height: playerHeight)
         playerPresentation.windowHeight = popover.contentSize.height
         // Snapshot the current status item before activation. In fullscreen its
         // window may already be hidden; the last visible anchor remains valid.
@@ -310,7 +398,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // remains authoritative for user resizing, independent of those hints.
         let height = playerPresentation.isHeightLocked ? sender.frame.height :
             min(max(frameSize.height, PlayerPresentation.minimumHeight), playerPresentation.maximumHeight)
-        return NSSize(width: 400, height: height)
+        return NSSize(width: PlayerPresentation.width, height: height)
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -328,15 +416,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         else { window.styleMask.insert(.resizable) }
         // Release old limits before applying the next mode's frame, then lock
         // reading panels to that frame. Programmatic layout never becomes a user size.
-        window.minSize = NSSize(width: 400, height: min(PlayerPresentation.minimumHeight, playerPresentation.maximumHeight))
-        window.maxSize = NSSize(width: 400, height: playerPresentation.maximumHeight)
+        window.minSize = NSSize(width: PlayerPresentation.width, height: locked ? 1 : min(PlayerPresentation.minimumHeight, playerPresentation.maximumHeight))
+        window.maxSize = NSSize(width: PlayerPresentation.width, height: playerPresentation.maximumHeight)
         let frame = window.frame
-        let desired = NSRect(x: frame.minX, y: frame.maxY - height, width: 400, height: height)
-        if abs(frame.height - height) > 0.5 || frame.width != 400 {
+        let desired = NSRect(x: frame.minX, y: frame.maxY - height, width: PlayerPresentation.width, height: height)
+        if abs(frame.height - height) > 0.5 || frame.width != PlayerPresentation.width {
             window.setFrame(Self.constrainedFrame(desired, to: window.screen ?? NSScreen.main), display: true, animate: false)
         }
         if locked {
-            window.minSize = NSSize(width: 400, height: height)
+            window.minSize = NSSize(width: PlayerPresentation.width, height: height)
             window.maxSize = window.minSize
         }
         playerPresentation.windowHeight = height
@@ -369,18 +457,38 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             window.backgroundColor = .clear
             window.hasShadow = true
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView:
+            window.contentView = FirstClickHostingView(rootView:
                 SettingsView(store: store, settings: store.settings, close: { [weak window] in window?.close() }))
             window.center()
             settingsWindow = window
         }
+        settingsNeedsActivation = true
+        settingsWindow?.orderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+        focusSettingsIfPending()
+        // A status menu can restore its former key window when tracking ends.
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.settingsWindow, window.isVisible else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            if window.isKeyWindow { self?.settingsNeedsActivation = false }
+        }
+    }
+
+    private func focusSettingsIfPending() {
+        guard settingsNeedsActivation, let window = settingsWindow else { return }
+        guard window.isVisible else { settingsNeedsActivation = false; return }
+        window.makeKeyAndOrderFront(nil)
+        if window.isKeyWindow { settingsNeedsActivation = false }
     }
 
     func close() {
         stopPopoverDismissalMonitoring()
         presentationObserver = nil
+        subscriptionObserver = nil
+        if let settingsActivationObserver { NotificationCenter.default.removeObserver(settingsActivationObserver) }
+        settingsActivationObserver = nil
+        settingsNeedsActivation = false
         if let interactionMonitor { NSEvent.removeMonitor(interactionMonitor) }
         interactionMonitor = nil
         pendingPopoverHeight = nil
@@ -416,6 +524,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         NSApp.mainMenu = main
     }
+}
+
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private final class PlayerWindow: NSWindow {

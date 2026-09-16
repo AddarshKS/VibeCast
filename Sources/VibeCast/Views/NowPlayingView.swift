@@ -1,50 +1,70 @@
 import SwiftUI
 
 struct NowPlayingView: View {
+    @Environment(\.playerDensity) private var density
     @ObservedObject var store: VibeCastStore
     @Binding var panel: PlayerPanel?
+    var detached = false
+    var toggleWindow: () -> Void = {}
+    var toggleMiniplayer: () -> Void = {}
 
     var body: some View {
-        VStack(spacing: 10) {
-            SongIdentityView(store: store)
+        VStack(spacing: density.value(10, 8)) {
+            HStack(alignment: .top, spacing: 4) {
+                SongIdentityView(store: store, artworkAction: toggleMiniplayer)
+                PlayerWindowButton(detached: detached, action: toggleWindow)
+            }
             PlaybackControlsView(store: store, panel: $panel)
         }
-        .padding(16)
-        .modifier(RaisedPlayerSurface())
+        .padding(density.value(16, 12))
+        .modifier(RaisedPlayerSurface(artworkURL: store.playback?.item?.resolvedTrack.artworkURL))
     }
 }
 
 struct SongIdentityView: View {
+    @Environment(\.playerDensity) private var density
     @ObservedObject var store: VibeCastStore
     var compact = false
+    var artworkAction: (() -> Void)? = nil
+    var draggable = false
 
     var body: some View {
-            HStack(spacing: 14) {
-                CoverArtwork(url: store.playback?.item?.resolvedTrack.artworkURL, size: compact ? 40 : 64)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
-                VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: density.value(14, 10)) {
+                if let artworkAction {
+                    AlbumArtworkButton(url: store.playback?.item?.resolvedTrack.artworkURL,
+                                       size: compact ? 40 : density.value(64, 48), action: artworkAction)
+                        .measureWandPosition("album")
+                } else {
+                    CoverArtwork(url: store.playback?.item?.resolvedTrack.artworkURL, size: compact ? 40 : density.value(64, 48))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
+                }
+                VStack(alignment: .leading, spacing: density.value(5, 3)) {
                     if !compact {
                         Text(store.playback?.isPlaying == true ? "NOW PLAYING" : (store.playback?.item == nil ? "YOUR SPOTIFY" : "PAUSED"))
                             .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                     }
                     Text(store.playback?.item?.name ?? (store.playback?.isPlaying == true ? "Playing on Spotify" : "Nothing playing"))
-                        .font(.system(size: compact ? 14 : 17, weight: .semibold)).lineLimit(compact ? 1 : 2)
+                        .font(.system(size: compact ? 14 : density.value(17, 15), weight: .semibold)).lineLimit(compact ? 1 : 2)
                     Text(store.playback?.item?.resolvedTrack.artist ?? (store.playback?.isPlaying == true ? "Open Spotify for this item." : "Choose your next song."))
-                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.system(size: density.value(12, 11))).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay {
+                    if draggable { SettingsDragRegion().accessibilityHidden(true) }
+                }
             }
     }
 }
 
 struct PlaybackControlsView: View {
+    @Environment(\.playerDensity) private var density
     @ObservedObject var store: VibeCastStore
     @Binding var panel: PlayerPanel?
     var selectPanel: ((PlayerPanel) -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: density.value(10, 7)) {
             if let duration = store.playback?.item?.durationMS, duration > 0 {
                 PlaybackSeekBar(store: store)
             }
@@ -71,7 +91,7 @@ struct PlaybackControlsView: View {
                     }
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color(nsColor: .windowBackgroundColor))
-                        .frame(width: 42, height: 42)
+                        .frame(width: density.value(42, 38), height: density.value(42, 38))
                         .background(Color.primary, in: Circle())
                 }
                 .buttonStyle(.plain)
