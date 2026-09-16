@@ -4,6 +4,7 @@ struct SyncedLyricsView: View {
     @ObservedObject var store: VibeCastStore
     let lyrics: TimedLyrics
     let trackURI: String?
+    var height: CGFloat = 250
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var follow = true
 
@@ -13,6 +14,7 @@ struct SyncedLyricsView: View {
             let fresh = !store.playbackRefreshFailed && context.date.timeIntervalSince(store.playbackUpdatedAt) < 12
             let active = fresh ? lyrics.activeLine(at: position) : nil
             ScrollViewReader { proxy in
+                VStack(spacing: 4) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(lyrics.lines) { line in
@@ -35,36 +37,47 @@ struct SyncedLyricsView: View {
                                 .accessibilityAddTraits(line.id == active ? .isSelected : [])
                         }
                     }
-                    .padding(.vertical, 85)
+                    .padding(.vertical, max(30, (height - 34) / 2 - 40))
                     .padding(.horizontal, 2)
                 }
-                .scrollIndicators(.hidden)
+                .scrollIndicators(.never)
                 .modifier(LyricScrollTracking(follow: $follow))
+                .frame(maxHeight: .infinity)
+                .clipped()
                 .overlay(alignment: .topTrailing) {
                     if !fresh {
                         Text("Reconnecting to Spotify").font(.caption).foregroundStyle(.secondary)
                             .padding(6).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    PlayerIconButton(title: follow ? "Pause lyric following" : "Follow song",
-                                     symbol: follow ? "location.fill" : "location", active: follow) {
-                        follow.toggle()
-                        if follow { scroll(proxy, to: active) }
+                    HStack {
+                        Spacer()
+                        PlayerIconButton(title: follow ? "Pause lyric following" : "Follow song",
+                                         symbol: follow ? "location.fill" : "location", active: follow) {
+                            follow.toggle()
+                            if follow { scroll(proxy, to: active) }
+                        }
                     }
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6)).padding(4)
+                    .frame(height: 30)
                 }
-                .onChange(of: active, initial: true) { _, value in
-                    if follow && fresh { scroll(proxy, to: value) }
+                .onChange(of: active, initial: true) { old, value in
+                    if follow && fresh { scroll(proxy, to: value, animated: old != nil) }
+                }
+                .onChange(of: height) { _, _ in
+                    if follow && fresh { scroll(proxy, to: active, animated: false) }
+                }
+                .task {
+                    await Task.yield()
+                    if follow && fresh { scroll(proxy, to: active, animated: false) }
                 }
             }
         }
-        .frame(height: 250)
+        .frame(height: max(0, height))
     }
 
-    private func scroll(_ proxy: ScrollViewProxy, to id: Int?) {
+    private func scroll(_ proxy: ScrollViewProxy, to id: Int?, animated: Bool = true) {
         guard let id = id ?? lyrics.lines.first?.id else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { proxy.scrollTo(id, anchor: .center) }
+        withAnimation(reduceMotion || !animated ? nil : .easeInOut(duration: 0.35)) { proxy.scrollTo(id, anchor: .center) }
     }
 
     private func canSeek(_ line: LyricLine) -> Bool {

@@ -51,7 +51,7 @@ final class VibeCastStore: ObservableObject {
          spotify: (any SpotifyServing)? = nil, planner: (any PlaylistPlanning)? = nil,
          notifications: (any Notifying)? = nil, defaults: UserDefaults = .standard,
          startAutomatically: Bool = true, chatGPT: ChatGPTSession? = nil,
-         controlConfirmationDelay: Duration = .milliseconds(500)) {
+         controlConfirmationDelay: Duration = .milliseconds(500), lyrics: any LyricsServing = LyricsClient()) {
         self.controlConfirmationDelay = controlConfirmationDelay
         let settings = settings ?? AppSettings(defaults: defaults)
         let secrets = secrets ?? KeychainStore()
@@ -63,7 +63,7 @@ final class VibeCastStore: ObservableObject {
         self.auth = auth
         let spotify = spotify ?? SpotifyAPIClient(auth: auth)
         self.spotify = spotify
-        self.playerDetails = PlayerDetailsStore(spotify: spotify)
+        self.playerDetails = PlayerDetailsStore(spotify: spotify, lyrics: lyrics)
         self.planner = planner ?? PlaylistPlanner(settings: settings, auth: auth, secrets: secrets, subscription: chatGPT)
         self.notifications = notifications ?? NotificationService()
         self.defaults = defaults

@@ -3,8 +3,9 @@ import SwiftUI
 struct MenuBarRootView: View {
     @ObservedObject var store: VibeCastStore
     @ObservedObject var presentation: PlayerPresentation
-    @State(initialValue: false) private var advanced: Bool
-    @State private var panel: PlayerPanel?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var wandPositions: [String: CGPoint] = [:]
+    @State private var rippleOrigin = CGPoint(x: 100, y: 300)
     @State private var measurements: [String: CGFloat] = [:]
     var maximumHeight: CGFloat = 680
     var resize: (CGFloat) -> Void = { _ in }
@@ -19,82 +20,32 @@ struct MenuBarRootView: View {
         self.presentation = presentation
         self.toggleWindow = toggleWindow
         self.openSettings = openSettings
-        _advanced = State(initialValue: developerView)
-        _panel = State(initialValue: panel)
+        if developerView { presentation.advanced = true }
+        if let panel { presentation.panel = panel }
         self.maximumHeight = maximumHeight
         self.resize = resize
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                header.padding(.horizontal, 20).padding(.vertical, 14)
-                if !advanced && store.authState.isLoggedIn {
-                    NowPlayingView(store: store, panel: $panel)
-                        .padding(.horizontal, 20).padding(.bottom, 14)
-                }
+        ZStack(alignment: .top) {
+            if focused {
+                focusedPlayer.transition(lyricsTransition).zIndex(1)
+            } else {
+                normalPlayer.transition(lyricsTransition).zIndex(0)
             }
-            .fixedSize(horizontal: false, vertical: true).measurePanelSection("top")
-            ScrollViewReader { scroller in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if advanced {
-                            HStack {
-                                Label(store.authState.displayText, systemImage: store.authState.isLoggedIn ? "checkmark.circle.fill" : "person.crop.circle")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        } else if !store.authState.isLoggedIn {
-                            AuthStatusView(store: store)
-                        }
-                        if advanced || panel == nil {
-                            if hasRequestStatus { RequestStatusView(store: store) }
-                            if let recommendation = store.pendingPlaylistRecommendation {
-                                recommendationView(recommendation)
-                            }
-                        }
-                        if advanced {
-                            Divider()
-                            DiagnosticsView(store: store)
-                            DeveloperConsole(log: store.diagnostics, subscription: store.chatGPT)
-                        } else if let panel, store.authState.isLoggedIn {
-                            if store.showsRequestProgress || store.latestError != nil { RequestStatusView(store: store) }
-                            if panel == .outputs {
-                                SpotifyDevicePicker(store: store, details: store.playerDetails, close: { self.panel = nil })
-                            } else {
-                                PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
-                                                  panel: panel, close: { self.panel = nil })
-                            }
-                        } else if store.authState.isLoggedIn && store.requestState == .idle && store.pendingPlaylistRecommendation == nil {
-                            suggestions
-                        }
-                    }
-                    .id("panel-top")
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .measurePanelSection("body")
-                }
-                .scrollIndicators(.hidden)
-                .frame(height: bodyHeight)
-                .onChange(of: panel) { _, _ in scroller.scrollTo("panel-top", anchor: .top) }
-                .onChange(of: advanced) { _, _ in scroller.scrollTo("panel-top", anchor: .top) }
-            }
-            VStack(spacing: 0) {
-                PromptComposerView(store: store, beforeSubmit: { panel = nil })
-                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
-                Divider().opacity(0.5)
-                footer
-            }
-            .fixedSize(horizontal: false, vertical: true).measurePanelSection("bottom")
         }
         // AppKit owns the outer height. Pin content to its top even during the
         // frame between a SwiftUI state change and the native popover resize.
         .frame(width: 400)
         .frame(maxHeight: .infinity, alignment: .top)
+        .coordinateSpace(name: "player")
         .modifier(DetachedPlayerSurface(enabled: presentation.isDetached))
         .tint(.teal)
+        .onPreferenceChange(WandPositions.self) { value in
+            wandPositions.merge(value, uniquingKeysWith: { _, latest in latest })
+        }
         .onPreferenceChange(PanelMeasurements.self) { value in
-            if value != measurements { measurements = value }
+            if !focused && !value.isEmpty && value != measurements { measurements = value }
         }
         .onChange(of: totalHeight, initial: true) { _, height in resize(height) }
         .onChange(of: store.prompt) { _, _ in store.noteInteraction() }
@@ -120,6 +71,124 @@ struct MenuBarRootView: View {
         }
     }
 
+    private var normalPlayer: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                header.padding(.horizontal, 20).padding(.vertical, 14)
+                if !advanced && store.authState.isLoggedIn {
+                    NowPlayingView(store: store, panel: panelBinding)
+                        .padding(.horizontal, 20).padding(.bottom, 14)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true).measurePanelSection("top")
+            ScrollViewReader { scroller in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if advanced {
+                            HStack {
+                                Label(store.authState.displayText, systemImage: store.authState.isLoggedIn ? "checkmark.circle.fill" : "person.crop.circle")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else if !store.authState.isLoggedIn {
+                            AuthStatusView(store: store)
+                        }
+                        if advanced || panel == nil {
+                            if hasRequestStatus { RequestStatusView(store: store) }
+                            if let recommendation = store.pendingPlaylistRecommendation {
+                                recommendationView(recommendation)
+                            }
+                        }
+                        if advanced {
+                            Divider()
+                            DiagnosticsView(store: store)
+                            DeveloperConsole(log: store.diagnostics, subscription: store.chatGPT)
+                        } else if let panel, store.authState.isLoggedIn {
+                            if store.showsRequestProgress || store.latestError != nil { RequestStatusView(store: store) }
+                            if panel == .outputs {
+                                SpotifyDevicePicker(store: store, details: store.playerDetails, close: { self.panel = nil })
+                            } else {
+                                PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
+                                                  panel: panel, close: { self.panel = nil },
+                                                  focusLyrics: presentation.isDetached ? { toggleLyricsFocus() } : nil)
+                            }
+                        } else if store.authState.isLoggedIn && store.requestState == .idle && store.pendingPlaylistRecommendation == nil {
+                            suggestions
+                        }
+                    }
+                    .id("panel-top")
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .measurePanelSection("body")
+                }
+                .scrollIndicators(.never)
+                .frame(height: bodyHeight)
+                .onChange(of: panel) { _, _ in scroller.scrollTo("panel-top", anchor: .top) }
+                .onChange(of: advanced) { _, _ in scroller.scrollTo("panel-top", anchor: .top) }
+            }
+            VStack(spacing: 0) {
+                PromptComposerView(store: store, beforeSubmit: { panel = nil })
+                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
+                Divider().opacity(0.5)
+                footer
+            }
+            .fixedSize(horizontal: false, vertical: true).measurePanelSection("bottom")
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var advanced: Bool {
+        get { presentation.advanced }
+        nonmutating set { presentation.advanced = newValue }
+    }
+    private var panel: PlayerPanel? {
+        get { presentation.panel }
+        nonmutating set { presentation.selectPanel(newValue) }
+    }
+    private var panelBinding: Binding<PlayerPanel?> {
+        Binding(get: { panel }, set: { panel = $0 })
+    }
+    private var focused: Bool { presentation.layout == .focusedLyrics }
+
+    private func toggleLyricsFocus() {
+        store.noteInteraction()
+        rippleOrigin = wandPositions[focused ? "focused" : "normal"] ?? rippleOrigin
+        withAnimation(.easeInOut(duration: reduceMotion ? 0.12 : 0.45)) {
+            presentation.toggleLyricsFocus()
+        }
+    }
+
+    private var lyricsTransition: AnyTransition {
+        reduceMotion ? .opacity : .ripple(from: rippleOrigin)
+    }
+
+    private var focusedPlayer: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                SongIdentityView(store: store, compact: true)
+                    .overlay { SettingsDragRegion().accessibilityHidden(true) }
+                LyricsModeButton(active: true, action: toggleLyricsFocus)
+                    .measureWandPosition("focused")
+                PlayerIconButton(title: "Return to menu bar", symbol: "arrow.down.right.and.arrow.up.left", action: toggleWindow)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 18)
+            GeometryReader { geometry in
+                PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
+                                  panel: .lyrics, close: toggleLyricsFocus, focused: true,
+                                  lyricsHeight: geometry.size.height)
+                    .padding(.horizontal, 24)
+            }
+            .clipped()
+            VStack(spacing: 10) {
+                if store.latestError != nil { RequestStatusView(store: store) }
+                PlaybackControlsView(store: store, panel: panelBinding, selectPanel: { panel = $0 })
+            }
+            .padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 16)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
     private var hasRequestStatus: Bool {
         store.showsRequestProgress || store.latestError != nil || store.latestResult != nil ||
             store.notificationNotice != nil || store.unfinishedPlaylist != nil
@@ -127,12 +196,18 @@ struct MenuBarRootView: View {
     private var topHeight: CGFloat { measurements["top"] ?? 250 }
     private var bottomHeight: CGFloat { measurements["bottom"] ?? 92 }
     private var bodyHeight: CGFloat {
+        if presentation.isDetached, let height = presentation.windowHeight {
+            return max(0, height - topHeight - bottomHeight)
+        }
+        return naturalBodyHeight
+    }
+    private var naturalBodyHeight: CGFloat {
         let readingPanel = !advanced && (panel == .lyrics || panel == .queue)
         return PanelSizing.bodyHeight(content: measurements["body"] ?? 120,
                                       top: topHeight, bottom: bottomHeight, maximum: min(maximumHeight, presentation.maximumHeight),
                                       readingPanel: readingPanel)
     }
-    private var totalHeight: CGFloat { ceil(topHeight + bodyHeight + bottomHeight) }
+    private var totalHeight: CGFloat { ceil(topHeight + naturalBodyHeight + bottomHeight) }
 
     private var header: some View {
         HStack(spacing: 10) {

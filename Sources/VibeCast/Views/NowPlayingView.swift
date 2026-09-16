@@ -6,20 +6,45 @@ struct NowPlayingView: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            SongIdentityView(store: store)
+            PlaybackControlsView(store: store, panel: $panel)
+        }
+        .padding(16)
+        .modifier(RaisedPlayerSurface())
+    }
+}
+
+struct SongIdentityView: View {
+    @ObservedObject var store: VibeCastStore
+    var compact = false
+
+    var body: some View {
             HStack(spacing: 14) {
-                CoverArtwork(url: store.playback?.item?.resolvedTrack.artworkURL, size: 64)
+                CoverArtwork(url: store.playback?.item?.resolvedTrack.artworkURL, size: compact ? 40 : 64)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(store.playback?.isPlaying == true ? "NOW PLAYING" : (store.playback?.item == nil ? "YOUR SPOTIFY" : "PAUSED"))
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                    if !compact {
+                        Text(store.playback?.isPlaying == true ? "NOW PLAYING" : (store.playback?.item == nil ? "YOUR SPOTIFY" : "PAUSED"))
+                            .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                    }
                     Text(store.playback?.item?.name ?? (store.playback?.isPlaying == true ? "Playing on Spotify" : "Nothing playing"))
-                        .font(.system(size: 17, weight: .semibold)).lineLimit(2)
+                        .font(.system(size: compact ? 14 : 17, weight: .semibold)).lineLimit(compact ? 1 : 2)
                     Text(store.playback?.item?.resolvedTrack.artist ?? (store.playback?.isPlaying == true ? "Open Spotify for this item." : "Choose your next song."))
                         .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+    }
+}
+
+struct PlaybackControlsView: View {
+    @ObservedObject var store: VibeCastStore
+    @Binding var panel: PlayerPanel?
+    var selectPanel: ((PlayerPanel) -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 10) {
             if let duration = store.playback?.item?.durationMS, duration > 0 {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = store.playback?.elapsedMS(observedAt: store.playbackUpdatedAt, now: context.date) ?? 0
@@ -85,11 +110,12 @@ struct NowPlayingView: View {
             }
             .buttonStyle(.plain).help("Change Spotify device").accessibilityLabel("Change Spotify device")
         }
-        .padding(16)
-        .modifier(RaisedPlayerSurface())
     }
 
-    private func toggle(_ value: PlayerPanel) { panel = panel == value ? nil : value }
+    private func toggle(_ value: PlayerPanel) {
+        if let selectPanel { selectPanel(value) }
+        else { panel = panel == value ? nil : value }
+    }
     private var transportPending: Bool { store.pendingPlayerAction == .pause || store.pendingPlayerAction == .resume }
     private func time(_ milliseconds: Int) -> String {
         let seconds = max(0, milliseconds / 1000)

@@ -7,6 +7,72 @@ import Testing
 @Suite(.serialized)
 struct PresentationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
+    func popoverDismissalHandlesStatusClicksEscapeAndExternalAppsWithoutClosingDetachedPlayer() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        let screen = try #require(NSScreen.main)
+        let (store, _, _, _, _) = try await StoreTests().fixture()
+        let controller = MenuBarController(store: store)
+        defer { controller.close() }
+        let anchor = NSRect(x: screen.visibleFrame.maxX - 100, y: screen.visibleFrame.maxY - 24, width: 36, height: 22)
+        #expect(controller.popover.behavior == .applicationDefined)
+        #expect(!controller.isMonitoringPopoverDismissal)
+        controller.showPopover(anchoredAt: anchor)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(controller.isMonitoringPopoverDismissal)
+        let content = try #require(controller.popover.contentViewController?.view.window)
+        let inside = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 50, y: 50),
+            modifierFlags: [], timestamp: 1, windowNumber: content.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        #expect(controller.handlePopoverEvent(inside) === inside)
+        #expect(controller.popover.isShown)
+
+        let button = try #require(controller.statusItem.button)
+        let statusWindow = try #require(button.window)
+        let statusClick = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: button.frame.origin,
+            modifierFlags: [], timestamp: 2, windowNumber: statusWindow.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 1))
+        #expect(controller.handlePopoverEvent(statusClick) === statusClick)
+        #expect(controller.popover.isShown, "The local monitor must leave the icon toggle to the button.")
+        #expect(button.sendAction(button.action, to: button.target))
+        #expect(!controller.popover.isShown)
+        #expect(!controller.isMonitoringPopoverDismissal)
+        #expect(controller.anchorWindow?.isVisible == false)
+
+        // Right-side system status icons use the external-click path without
+        // necessarily resigning our application's active state.
+        for _ in 0..<3 {
+            controller.showPopover(anchoredAt: anchor)
+            #expect(controller.isMonitoringPopoverDismissal)
+            controller.dismissPopoverForExternalInteraction()
+            #expect(!controller.popover.isShown)
+            #expect(!controller.isMonitoringPopoverDismissal)
+        }
+        controller.showPopover(anchoredAt: anchor)
+        let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 3,
+            windowNumber: content.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        #expect(controller.handlePopoverEvent(escape) == nil)
+        #expect(!controller.popover.isShown)
+
+        controller.showPopover(anchoredAt: anchor)
+        let outside = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 4, windowNumber: 0, context: nil,
+            eventNumber: 4, clickCount: 1, pressure: 1))
+        #expect(controller.handlePopoverEvent(outside) === outside, "Outside clicks must still reach their destination.")
+        #expect(!controller.popover.isShown)
+
+        controller.showPopover(anchoredAt: anchor)
+        controller.togglePlayerWindow()
+        #expect(!controller.isMonitoringPopoverDismissal)
+        controller.dismissPopoverForExternalInteraction()
+        #expect(controller.playerWindow?.isVisible == true)
+        #expect(controller.playerPresentation.isDetached)
+        #expect(!controller.isMonitoringPopoverDismissal)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
     func resizingRetainsOnscreenAnchorAcrossContentChanges() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
@@ -97,7 +163,7 @@ struct PresentationTests {
         player.performClose(nil)
         #expect(!controller.playerPresentation.isDetached)
         #expect(!player.isVisible)
-        #expect(!controller.popover.isShown)
+        #expect(controller.popover.isShown)
         #expect(controller.popover.contentViewController === host)
         #expect(store.prompt == "Keep this draft")
         controller.togglePlayerWindow()
@@ -106,6 +172,69 @@ struct PresentationTests {
         #expect(player.frame.origin == moved.origin)
         controller.togglePlayerWindow()
         #expect(!player.isVisible)
+        #expect(controller.popover.isShown)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
+    func detachedWindowResizesOnlyVerticallyAndRestoresHeightAcrossPanels() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        let screen = try #require(NSScreen.main)
+        let (store, _, _, _, _) = try await StoreTests().fixture()
+        let controller = MenuBarController(store: store)
+        defer { controller.close() }
+        controller.popover.behavior = .applicationDefined
+        controller.showPopover(anchoredAt: NSRect(x: screen.visibleFrame.maxX - 100,
+                                                y: screen.visibleFrame.maxY - 24, width: 36, height: 22))
+        try await Task.sleep(for: .milliseconds(150))
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(150))
+        let window = try #require(controller.playerWindow)
+        let state = controller.playerPresentation
+        #expect(window.styleMask.contains(.resizable))
+        #expect(controller.windowWillResize(window, to: NSSize(width: 900, height: 200)) == NSSize(width: 400, height: 405))
+        let originalTop = window.frame.maxY
+        window.setFrame(NSRect(x: window.frame.minX, y: originalTop - 405, width: 400, height: 405), display: true)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.standardHeight == 405)
+        let customFrame = window.frame
+        for panel in [PlayerPanel.queue, .lyrics, .queue, .lyrics] {
+            state.selectPanel(panel)
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.frame.height > 405)
+            #expect(!window.styleMask.contains(.resizable))
+            #expect(window.frame.width == 400)
+            #expect(abs(window.frame.maxY - customFrame.maxY) < 2)
+            #expect(abs(window.frame.minX - customFrame.minX) < 2)
+            #expect(controller.windowWillResize(window, to: NSSize(width: 600, height: 420)) == window.frame.size)
+            state.selectPanel(nil)
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.frame.height == 405)
+            #expect(window.styleMask.contains(.resizable))
+            #expect(controller.windowWillResize(window, to: NSSize(width: 100, height: 200)) == NSSize(width: 400, height: 405))
+        }
+        state.selectPanel(.lyrics)
+        state.toggleLyricsFocus()
+        try await Task.sleep(for: .milliseconds(150))
+        window.setContentSize(NSSize(width: 400, height: 540))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.focusedHeight == 540)
+        state.toggleLyricsFocus()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(window.frame.height > 405)
+        #expect(!window.styleMask.contains(.resizable))
+        state.selectPanel(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(window.frame.height == 405)
+        controller.returnToMenuBar()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(controller.popover.isShown)
+        #expect(state.standardHeight == nil && state.focusedHeight == nil)
+        let natural = controller.popover.contentSize.height
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(window.frame.height == max(405, natural))
     }
 
     @Test func callbackPagesAreBrandedAndNeverClaimPrematureConnectionSuccess() throws {

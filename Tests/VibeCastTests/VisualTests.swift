@@ -6,6 +6,40 @@ import Testing
 @MainActor
 struct VisualTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func renderCompactAndFocusedLyrics() async throws {
+        _ = NSApplication.shared
+        let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".artifacts/previews")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let (store, api, _, _, _) = try await StoreTests().fixture(lyrics: PreviewTimedLyrics())
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device:
+            SpotifyDevice(id: "test", name: "This Mac", isActive: true, isRestricted: false),
+            shuffleState: true, repeatState: "off", progressMS: 74000)
+        await store.refreshPlayback()
+        store.settings.lyricsEnabled = true
+        await store.playerDetails.loadLyrics(for: PlayerTests.track, enabled: true)
+        let state = PlayerPresentation()
+        state.isDetached = true
+        state.recordResize(405)
+        try await render(MenuBarRootView(store: store, presentation: state), name: "compact-player-dark",
+                         directory: output, scheme: .dark, height: 405)
+        state.selectPanel(.lyrics)
+        state.windowHeight = 680
+        for scheme in [ColorScheme.dark, .light] {
+            try await render(MenuBarRootView(store: store, presentation: state),
+                             name: "detached-lyrics-hint-\(scheme)", directory: output,
+                             scheme: scheme, height: 680)
+        }
+        state.toggleLyricsFocus()
+        for height in [405.0, 650] {
+            state.recordResize(height)
+            try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-\(Int(height))-dark",
+                             directory: output, scheme: .dark, height: height)
+        }
+        try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-light",
+                         directory: output, scheme: .light, height: 650)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
     func headerStaysPinnedWhileContentAndNativeWindowHaveDifferentHeights() async throws {
         _ = NSApplication.shared
         let (store, api, _, _, _) = try await StoreTests().fixture()
@@ -64,6 +98,7 @@ struct VisualTests {
         presentation.isDetached = true
         try await render(MenuBarRootView(store: store, panel: .queue, presentation: presentation),
                          name: "detached-queue-dark", directory: output, scheme: .dark)
+        presentation.selectPanel(nil)
         try await render(MenuBarRootView(store: store, presentation: presentation),
                          name: "detached-ready-light", directory: output, scheme: .light)
         try await render(MenuBarRootView(store: store, panel: .queue), name: "queue-dark", directory: output, scheme: .dark)
@@ -74,7 +109,7 @@ struct VisualTests {
         await lyrics.loadLyrics(for: PlayerTests.track, enabled: true)
         try await render(ScrollView {
             PlayerDetailsView(store: store, details: lyrics, settings: store.settings, panel: .lyrics, close: {}).padding(20)
-        }, name: "lyrics-text-dark", directory: output, scheme: .dark, height: 300)
+        }.scrollIndicators(.never), name: "lyrics-text-dark", directory: output, scheme: .dark, height: 300)
         let timed = try #require(TimedLyrics(lrc: "[00:00.00]An open road\n[00:30.00]A quiet sky\n[01:00.00]The evening takes its time\n[01:20.00]A little light\n[01:30.00]A passing train\n[02:00.00]And we are home again"))
         try await render(SyncedLyricsView(store: store, lyrics: timed, trackURI: PlayerTests.track.uri).padding(20),
                          name: "lyrics-synced-dark", directory: output, scheme: .dark, height: 290)
@@ -126,6 +161,12 @@ struct VisualTests {
         window.setContentSize(NSSize(width: width, height: fittedHeight))
         host.frame = NSRect(x: 0, y: 0, width: width, height: fittedHeight)
         host.layoutSubtreeIfNeeded()
+        if name.contains("lyrics") || name.contains("queue") {
+            for scroll in scrollViews(in: host) {
+                #expect(!scroll.hasVerticalScroller || scroll.verticalScroller?.isHidden == true,
+                        "\(name) must not expose an outer or inner scrollbar.")
+            }
+        }
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -140,5 +181,15 @@ struct VisualTests {
         #expect(colors.count > minimumColors, "The content area must render, not only the header.")
         try png.write(to: directory.appendingPathComponent(name + ".png"))
         window.contentView = nil
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+}
+
+private struct PreviewTimedLyrics: LyricsServing {
+    func lyrics(for track: SpotifyTrack) async throws -> Lyrics {
+        .synced(TimedLyrics(lrc: "[00:00.00]An open road\n[00:30.00]A quiet sky\n[01:00.00]The evening takes its time\n[01:20.00]A little light\n[01:30.00]A passing train\n[02:00.00]And we are home again")!)
     }
 }

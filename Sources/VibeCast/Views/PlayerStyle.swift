@@ -15,6 +15,34 @@ struct RaisedPlayerSurface: ViewModifier {
     }
 }
 
+struct LyricsModeButton: View {
+    var active = false
+    var action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+
+    private var title: String { active ? "Exit Lyrics Mode" : "Enter Lyrics Mode" }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16, weight: .medium))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(.primary)
+                .shadow(color: .primary.opacity(hovered ? 0.45 : 0), radius: 4)
+                .frame(width: 30, height: 30)
+                .background(Color.primary.opacity(hovered ? 0.07 : 0),
+                            in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
+        .help(title).accessibilityLabel(title)
+        .accessibilityAddTraits(active ? .isSelected : [])
+    }
+}
+
 struct PlayerIconButton: View {
     let title: String
     let symbol: String

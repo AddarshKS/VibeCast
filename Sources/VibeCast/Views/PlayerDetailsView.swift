@@ -6,13 +6,28 @@ struct PlayerDetailsView: View {
     @ObservedObject var settings: AppSettings
     let panel: PlayerPanel
     var close: () -> Void
+    var focusLyrics: (() -> Void)? = nil
+    var focused = false
+    var lyricsHeight: CGFloat = 250
     @State private var retry = 0
     @State private var handledRetry = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if !focused {
             HStack {
                 Text(panel == .queue ? "Up next" : "Lyrics").font(.system(size: 15, weight: .semibold))
+                if panel == .lyrics, let focusLyrics {
+                    LyricsModeButton(action: focusLyrics)
+                        .measureWandPosition("normal")
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.left").accessibilityHidden(true)
+                        Text("Try this!")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                }
                 Spacer()
                 if panel == .lyrics && settings.lyricsEnabled {
                     Link("LRCLIB", destination: URL(string: "https://lrclib.net")!)
@@ -26,7 +41,16 @@ struct PlayerDetailsView: View {
                 }
                 PlayerIconButton(title: "Close \(panel.rawValue)", symbol: "xmark", action: close)
             }
-            if panel == .queue { queue } else { lyrics }
+            }
+            if panel == .queue { queue }
+            else if focused {
+                if case .loaded(.synced) = details.lyrics, settings.lyricsEnabled, store.playback?.item != nil {
+                    lyrics
+                } else {
+                    ScrollView { lyrics.frame(maxWidth: .infinity, alignment: .leading) }
+                        .scrollIndicators(.never).frame(height: lyricsHeight)
+                }
+            } else { lyrics }
         }
         .task(id: "\(panel.rawValue)|\(store.playback?.item?.uri ?? "")|\(settings.lyricsEnabled)|\(retry)") {
             let force = retry != handledRetry
@@ -89,7 +113,8 @@ struct PlayerDetailsView: View {
             case .loaded(.unavailable): empty("No lyrics for this song.", detail: "This recording isn't available on LRCLIB.")
             case .loaded(.instrumental): empty("Just the music.", detail: "This recording is instrumental.")
             case .loaded(.synced(let timed)):
-                SyncedLyricsView(store: store, lyrics: timed, trackURI: details.lyricsTrackURI).id(details.lyricsTrackURI)
+                SyncedLyricsView(store: store, lyrics: timed, trackURI: details.lyricsTrackURI,
+                                 height: lyricsHeight).id(details.lyricsTrackURI)
             case .loaded(.text(let text)):
                 Text("Timing unavailable for this recording").font(.caption).foregroundStyle(.secondary)
                 Text(text).font(.system(size: 22, weight: .semibold, design: .rounded))

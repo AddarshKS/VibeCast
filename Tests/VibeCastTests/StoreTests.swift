@@ -123,7 +123,7 @@ final class FakeNotifications: Notifying {
 
 @MainActor
 final class StoreTests {
-    func fixture(defaults: UserDefaults? = nil, api: FakeSpotify? = nil) async throws
+    func fixture(defaults: UserDefaults? = nil, api: FakeSpotify? = nil, lyrics: any LyricsServing = FixedLyrics()) async throws
         -> (VibeCastStore, FakeSpotify, FakePlanner, FakeNotifications, UserDefaults) {
         let defaults = defaults ?? UserDefaults(suiteName: UUID().uuidString)!
         let settings = AppSettings(defaults: defaults)
@@ -139,7 +139,7 @@ final class StoreTests {
         let chatGPT = ChatGPTSession(settings: settings, rpc: codex)
         let store = VibeCastStore(settings: settings, secrets: secrets, spotify: api, planner: planner,
                                   notifications: notifications, defaults: defaults, startAutomatically: false, chatGPT: chatGPT,
-                                  controlConfirmationDelay: .zero)
+                                  controlConfirmationDelay: .zero, lyrics: lyrics)
         await store.refreshAuthState()
         return (store, api, planner, notifications, defaults)
     }
