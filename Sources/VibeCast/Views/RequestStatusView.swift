@@ -4,54 +4,47 @@ struct RequestStatusView: View {
     @ObservedObject var store: VibeCastStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(store.requestState.displayText, systemImage: iconName)
-                .font(.subheadline)
-                .foregroundStyle(foregroundStyle)
-
-            if let result = store.latestResult {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(result.title)
-                        .font(.callout.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            if store.showsRequestProgress {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(store.progress).font(.callout).foregroundStyle(.secondary)
+                }
+                .accessibilityLabel(store.progress)
+            } else if let error = store.latestError {
+                Label {
+                    Text(error).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                }
+                .font(.system(size: 12))
+            } else if let result = store.latestResult, result.source != .findPlaylist {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(result.title).font(.system(size: 14, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
                     if let detail = result.detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let url = result.playlist?.spotifyURL {
+                        Link(destination: url) { Label("Open in Spotify", systemImage: "arrow.up.right") }
+                            .font(.system(size: 12))
                     }
                 }
             }
-
-            if let error = store.latestError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let notice = store.notificationNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+            }
+            if let draft = store.unfinishedPlaylist, !store.isBusy {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("\(draft.playlist.name) is waiting for its songs.").font(.callout)
+                    HStack {
+                        Button("Finish playlist") { store.finishPlaylist() }.buttonStyle(.borderedProminent)
+                        if let url = draft.playlist.spotifyURL { Link("Open in Spotify", destination: url) }
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private var iconName: String {
-        switch store.requestState {
-        case .idle: "sparkles"
-        case .routing: "arrow.triangle.branch"
-        case .executing: "waveform"
-        case .completed: "checkmark.circle"
-        case .failed: "exclamationmark.triangle"
-        }
-    }
-
-    private var foregroundStyle: some ShapeStyle {
-        switch store.requestState {
-        case .failed:
-            return AnyShapeStyle(.red)
-        case .completed:
-            return AnyShapeStyle(.green)
-        default:
-            return AnyShapeStyle(.primary)
-        }
     }
 }

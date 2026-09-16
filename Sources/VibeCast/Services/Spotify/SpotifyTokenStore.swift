@@ -1,68 +1,52 @@
 import Foundation
 import Security
 
-final class SpotifyTokenStore {
-    private let service = "\(AppConfig.bundleID).spotify"
-    private let account = "oauth-token"
-    private let accessGroup: String? = nil
+@MainActor
+protocol SecretStoring {
+    func read(account: String) throws -> Data?
+    func write(_ data: Data, account: String) throws
+    func remove(account: String) throws
+}
 
-    func load() throws -> SpotifyToken? {
-        var query = baseQuery()
+@MainActor
+final class KeychainStore: SecretStoring {
+    private let service: String
+    init(service: String = AppConfig.bundleID) { self.service = service }
+
+    func read(account: String) throws -> Data? {
+        var query = query(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-
-        if status == errSecItemNotFound {
-            return nil
-        }
-
-        guard status == errSecSuccess, let data = item as? Data else {
-            throw SpotifyAuthError.keychain(status)
-        }
-
-        return try JSONDecoder().decode(SpotifyToken.self, from: data)
+        if status == errSecItemNotFound { return nil }
+        try check(status)
+        return item as? Data
     }
 
-    func save(_ token: SpotifyToken) throws {
-        let data = try JSONEncoder().encode(token)
-        var query = baseQuery()
-        let attributes: [String: Any] = [kSecValueData as String: data]
-
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+    func write(_ data: Data, account: String) throws {
+        let status = SecItemUpdate(query(account) as CFDictionary, [kSecValueData: data] as CFDictionary)
         if status == errSecItemNotFound {
-            query[kSecValueData as String] = data
-            let addStatus = SecItemAdd(query as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw SpotifyAuthError.keychain(addStatus)
-            }
-            return
-        }
+            var item = query(account)
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            try check(SecItemAdd(item as CFDictionary, nil))
+        } else { try check(status) }
+    }
 
+    func remove(account: String) throws {
+        let status = SecItemDelete(query(account) as CFDictionary)
+        if status != errSecItemNotFound { try check(status) }
+    }
+
+    private func query(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
+    }
+
+    private func check(_ status: OSStatus) throws {
         guard status == errSecSuccess else {
-            throw SpotifyAuthError.keychain(status)
+            throw UserFacingError("VibeCast couldn't access your login in Keychain (\(status)). Unlock your login keychain and try again.")
         }
-    }
-
-    func clear() throws {
-        let status = SecItemDelete(baseQuery() as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound {
-            throw SpotifyAuthError.keychain(status)
-        }
-    }
-
-    private func baseQuery() -> [String: Any] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-
-        if let accessGroup {
-            query[kSecAttrAccessGroup as String] = accessGroup
-        }
-
-        return query
     }
 }

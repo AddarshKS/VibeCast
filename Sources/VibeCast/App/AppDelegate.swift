@@ -1,36 +1,28 @@
 import AppKit
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    let store = VibeCastStore()
+    private var presentation: MenuBarController?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
-        )
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        presentation = MenuBarController(store: store)
+        NotificationService.registerCategories()
+        UNUserNotificationCenter.current().delegate = self
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        NSAppleEventManager.shared().removeEventHandler(
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
-        )
+    func applicationWillTerminate(_ notification: Notification) { store.chatGPT.shutdown() }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
-    @objc
-    private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
-        guard
-            let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
-            let url = URL(string: urlString)
-        else {
-            return
-        }
-
-        Task { @MainActor in
-            SpotifyCallbackRouter.shared.handle(url: url)
-        }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        guard let rawID = response.notification.request.content.userInfo["recommendationID"] as? String,
+              let id = UUID(uuidString: rawID) else { return }
+        await NotificationActionRouter.shared.handle(actionIdentifier: response.actionIdentifier, recommendationID: id)
     }
 }

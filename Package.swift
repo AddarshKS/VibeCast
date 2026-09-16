@@ -13,9 +13,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "VibeCast",
+            exclude: ["Resources/VibeCastIcon.png", "Resources/VCMenuBarIcon.png"],
             resources: [
                 .process("Resources")
             ]
-        )
+        ),
+        .testTarget(name: "VibeCastTests", dependencies: ["VibeCast"])
     ]
 )

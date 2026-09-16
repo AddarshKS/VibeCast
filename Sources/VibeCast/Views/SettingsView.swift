@@ -2,15 +2,180 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: VibeCastStore
+    @ObservedObject var settings: AppSettings
+    @ObservedObject private var subscription: ChatGPTSession
+    @Environment(\.dismiss) private var dismiss
+    private var close: (() -> Void)?
+    @State(initialValue: "") private var clientID: String
+    @State(initialValue: "") private var serviceAddress: String
+    @State(initialValue: "") private var apiKey: String
+    @State(initialValue: "") private var model: String
+    @State(initialValue: "") private var codexExecutable: String
+    @State(initialValue: false) private var advanced: Bool
+    @State(initialValue: false) private var saved: Bool
+
+    init(store: VibeCastStore, settings: AppSettings, close: (() -> Void)? = nil) {
+        self.store = store
+        self.settings = settings
+        self.subscription = store.chatGPT
+        self.close = close
+    }
 
     var body: some View {
-        Form {
-            LabeledContent("Spotify client ID", value: AppConfig.spotifyClientID)
-            LabeledContent("Redirect URI", value: AppConfig.spotifyRedirectURI)
-            LabeledContent("Login status", value: store.authState.displayText)
+        VStack(spacing: 0) {
+            HStack {
+                Text("Settings").font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 30)
+                    .background(SettingsDragRegion())
+                Button { if let close { close() } else { dismiss() } } label: { Image(systemName: "xmark").frame(width: 24, height: 24) }
+                    .buttonStyle(.borderless).help("Close settings").accessibilityLabel("Close settings")
+            }
+            .padding(20)
+            Form {
+                Section("Spotify") {
+                    LabeledContent("Account", value: store.authState.displayText)
+                    if store.authState.isLoggedIn {
+                        Button("Disconnect Spotify", role: .destructive) { store.logout() }
+                    } else {
+                        Button("Connect Spotify") { store.login() }
+                    }
+                }
+                Section("Cast Magic") {
+                    Toggle("Enable Cast Magic", isOn: $settings.aiConsent)
+                    Text("Your musical requests are sent to OpenAI to curate songs. Spotify listening history, search results, and credentials are never included in AI prompts.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Picker("AI connection", selection: $settings.aiProvider) {
+                        ForEach(AIProvider.allCases) { Text($0.title).tag($0) }
+                    }
+                    .disabled(store.isBusy || subscription.isBusy)
+                    if settings.aiProvider == .chatGPT {
+                        ChatGPTConnectionView(session: store.chatGPT, settings: settings, requestBusy: store.isBusy)
+                    } else if settings.aiProvider == .personalAPI {
+                        SecureField("API key", text: $apiKey, prompt: Text("Leave blank to keep saved key"))
+                        TextField("Model", text: $model)
+                        Text("API usage is billed to your OpenAI API account, separately from ChatGPT.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Remove saved key", role: .destructive) { store.removeAPIKey() }
+                    } else {
+                        Text("Uses the publisher's hosted AI service. Your ChatGPT subscription does not cover API usage.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section("Notifications") {
+                    Toggle("Playlist recommendations", isOn: $settings.notificationsEnabled)
+                    Button("Notification settings...") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+                    }
+                }
+                Section("Lyrics") {
+                    Toggle("Use LRCLIB", isOn: $settings.lyricsEnabled)
+                    Text("Song title, artist, album and duration are shared with LRCLIB only while the lyrics panel is open. No Spotify credentials are shared.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
+                    DisclosureGroup("Advanced", isExpanded: $advanced) {
+                        TextField("Spotify client ID", text: $clientID)
+                        TextField("VibeCast service", text: $serviceAddress, prompt: Text("https://your-service.example"))
+                        HStack {
+                            TextField("Codex executable", text: $codexExecutable, prompt: Text("Automatic"))
+                            Button {
+                                let panel = NSOpenPanel()
+                                panel.canChooseDirectories = false
+                                panel.allowsMultipleSelection = false
+                                panel.prompt = "Select Codex"
+                                if panel.runModal() == .OK { codexExecutable = panel.url?.path ?? "" }
+                            } label: { Image(systemName: "folder") }
+                            .help("Choose Codex executable").accessibilityLabel("Choose Codex executable")
+                        }
+                        LabeledContent("Spotify redirect", value: AppConfig.spotifyRedirectURI).textSelection(.enabled)
+                        Text("Changing connections signs you out. Register the redirect URL in the Spotify developer dashboard.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        LabeledContent("Version", value: AppConfig.version)
+                    }
+                }
+                if let error = store.latestError {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            HStack {
+                if saved { Text("Saved").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Button("Save changes") {
+                    store.saveConnections(clientID: clientID, serviceAddress: serviceAddress,
+                                          apiKey: apiKey, model: model, codexExecutable: codexExecutable)
+                    apiKey = ""
+                    saved = store.latestError == nil
+                }
+                .modifier(PrimaryMusicButton())
+                .disabled(store.isBusy || subscription.isBusy || !validConnection)
+            }
+            .padding(20)
         }
-        .formStyle(.grouped)
-        .padding()
-        .frame(width: 460)
+        .frame(minWidth: 500, idealWidth: 520, maxWidth: .infinity, minHeight: 620, idealHeight: 680, maxHeight: .infinity)
+        .modifier(SettingsGlass())
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)).allowsHitTesting(false))
+        .tint(.teal)
+        .onAppear {
+            clientID = settings.spotifyClientID
+            serviceAddress = settings.serviceAddress
+            codexExecutable = settings.codexExecutable
+            model = settings.openAIModel
+        }
+    }
+
+    private var validConnection: Bool {
+        (clientID.isEmpty || clientID.matches("^[a-fA-F0-9]{32}$")) &&
+            (serviceAddress.isEmpty || AppConfig.serviceURL(serviceAddress) != nil) &&
+            (settings.aiProvider != .personalAPI || !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}
+
+private struct ChatGPTConnectionView: View {
+    @ObservedObject var session: ChatGPTSession
+    @ObservedObject var settings: AppSettings
+    let requestBusy: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let account = session.account {
+                Text(account.displayName).font(.callout).textSelection(.enabled)
+                Picker("Model", selection: $settings.subscriptionModel) {
+                    Text("Account default").tag("")
+                    ForEach(session.models) { Text($0.displayName).tag($0.model) }
+                }
+                .disabled(session.isBusy || requestBusy)
+                if let remaining = session.usage?.core?.remaining {
+                    Text("Included allowance: \(remaining)% remaining").font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Disconnect ChatGPT") { session.signOut() }
+                    Button { Task { await session.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                        .help("Refresh connection").accessibilityLabel("Refresh connection")
+                }
+                .disabled(session.isBusy || requestBusy)
+            } else if session.isSigningIn {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for ChatGPT...").font(.callout)
+                    Spacer()
+                    Button("Cancel") { session.cancelSignIn() }
+                }
+            } else {
+                Button("Sign in with ChatGPT") { session.signIn() }
+                    .disabled(session.isBusy || requestBusy)
+            }
+            Text("Uses your ChatGPT allowance through local Codex, with no API-key fallback. Limits are shared with your other Codex usage.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error = session.error {
+                Text(error).font(.caption).foregroundStyle(.orange)
+                Link("Codex setup", destination: URL(string: "https://learn.chatgpt.com/docs/cli")!)
+                    .font(.caption)
+            }
+        }
+        .task { await session.refresh() }
     }
 }

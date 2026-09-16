@@ -2,34 +2,44 @@ import SwiftUI
 
 struct AuthStatusView: View {
     @ObservedObject var store: VibeCastStore
-
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: store.authState.isLoggedIn ? "checkmark.circle.fill" : "person.crop.circle.badge.exclamationmark")
-                .foregroundStyle(store.authState.isLoggedIn ? .green : .secondary)
-
-            Text(store.authState.displayText)
-                .font(.subheadline)
-                .lineLimit(1)
-
-            Spacer()
-
-            if store.authState.isLoggedIn {
-                Button("Logout") {
-                    store.logout()
-                }
-                .controlSize(.small)
-                .disabled(store.authState.isBusy)
-            } else {
-                Button("Login") {
-                    store.login()
-                }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .disabled(store.authState.isBusy)
+        VStack(alignment: .leading, spacing: 22) {
+            Image(systemName: "headphones").font(.system(size: 48, weight: .ultraLight))
+                .foregroundStyle(.teal).padding(.top, 12).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your music.\nYour moment.")
+                    .font(.system(size: 30, weight: .medium, design: .rounded))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Connect your Spotify account.")
+                    .font(.system(size: 14)).foregroundStyle(.secondary)
             }
+            if store.authState.isBusy {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(store.authState == .authenticating ? "Waiting for Spotify..." : "Checking your connection...")
+                        .font(.callout)
+                    Spacer()
+                    if store.authState == .authenticating {
+                        Button("Cancel") { store.cancel() }.buttonStyle(.borderless)
+                    }
+                }
+            } else {
+                Button { store.login() } label: {
+                    HStack {
+                        Text("Connect Spotify")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.vertical, 5)
+                }
+                .modifier(PrimaryMusicButton())
+                .controlSize(.large)
+            }
+            Text("Playback requires Spotify Premium. Your login stays in your Mac's Keychain.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.bottom, 12)
     }
 }

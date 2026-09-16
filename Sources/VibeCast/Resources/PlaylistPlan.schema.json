@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description", "tracks"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "description": { "type": "string", "maxLength": 280 },
+    "tracks": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "artist"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 150 },
+          "artist": { "type": "string", "minLength": 1, "maxLength": 150 }
+        }
+      }
+    }
+  }
+}
