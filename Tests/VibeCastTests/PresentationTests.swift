@@ -7,6 +7,80 @@ import Testing
 @Suite(.serialized)
 struct PresentationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
+    func dropdownReadingPanelsAndLyricsModeKeepTheirAnchorAndAllocatedHeight() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        let screen = try #require(NSScreen.main)
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        let controller = MenuBarController(store: store)
+        defer { controller.close() }
+        controller.showPopover(anchoredAt: NSRect(x: screen.visibleFrame.maxX - 100,
+                                                y: screen.visibleFrame.maxY - 24, width: 36, height: 22))
+        try await Task.sleep(for: .milliseconds(150))
+        let window = try #require(controller.popover.contentViewController?.view.window)
+        let initial = window.frame
+        let state = controller.playerPresentation
+        for panel in [PlayerPanel.queue, .lyrics, .queue, .lyrics] {
+            state.selectPanel(panel)
+            // Sample throughout growth, not just its settled frame.
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(8))
+                #expect(controller.popover.isShown)
+                #expect(abs(window.frame.minX - initial.minX) < 2)
+                #expect(abs(window.frame.maxY - initial.maxY) < 2)
+                #expect(state.windowHeight == controller.popover.contentSize.height)
+            }
+            #expect(window.frame.height > initial.height)
+            if panel == .lyrics {
+                let lyricsFrame = window.frame
+                for _ in 0..<2 {
+                    withAnimation(.easeInOut(duration: 0.45)) { state.toggleLyricsFocus() }
+                    #expect(state.layout == .focusedLyrics)
+                    #expect(state.isHeightLocked)
+                    for _ in 0..<30 {
+                        try await Task.sleep(for: .milliseconds(16))
+                        #expect(window.frame == lyricsFrame)
+                        #expect(controller.popover.isShown)
+                    }
+                    withAnimation(.easeInOut(duration: 0.45)) { state.toggleLyricsFocus() }
+                    try await Task.sleep(for: .milliseconds(500))
+                    #expect(window.frame == lyricsFrame)
+                }
+            }
+            state.selectPanel(nil)
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(abs(window.frame.height - initial.height) < 2)
+        }
+        state.selectPanel(.lyrics)
+        try await Task.sleep(for: .milliseconds(150))
+        state.toggleLyricsFocus()
+        try await Task.sleep(for: .milliseconds(150))
+        let dropdownHeight = controller.popover.contentSize.height
+        let host = controller.popover.contentViewController
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(150))
+        let player = try #require(controller.playerWindow)
+        #expect(player.contentViewController === host)
+        #expect(state.layout == .focusedLyrics)
+        #expect(player.frame.height == dropdownHeight)
+        #expect(!state.isHeightLocked)
+        #expect(player.styleMask.contains(.resizable))
+        #expect(controller.windowWillResize(player, to: NSSize(width: 700, height: 200)) == NSSize(width: 400, height: 405))
+        player.setContentSize(NSSize(width: 400, height: 540))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.focusedHeight == 540)
+        controller.returnToMenuBar()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(state.layout == .lyrics)
+        #expect(state.focusedHeight == nil)
+        #expect(controller.popover.isShown)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
     func popoverDismissalHandlesStatusClicksEscapeAndExternalAppsWithoutClosingDetachedPlayer() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)

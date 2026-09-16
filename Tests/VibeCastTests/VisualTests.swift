@@ -37,6 +37,54 @@ struct VisualTests {
         }
         try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-light",
                          directory: output, scheme: .light, height: 650)
+        state.isDetached = false
+        state.resetWindowSize()
+        state.windowHeight = 650
+        for scheme in [ColorScheme.dark, .light] {
+            try await render(MenuBarRootView(store: store, presentation: state),
+                             name: "popover-lyrics-\(scheme)", directory: output, scheme: scheme, height: 650)
+            state.toggleLyricsFocus()
+            try await render(MenuBarRootView(store: store, presentation: state),
+                             name: "popover-focused-lyrics-\(scheme)", directory: output, scheme: scheme, height: 650)
+            state.toggleLyricsFocus()
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func dropdownContentWaitsForNativeHeightBeforeExpanding() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        let state = PlayerPresentation()
+        state.windowHeight = 500
+        var requestedHeight: CGFloat = 0
+        let host = NSHostingView(rootView: MenuBarRootView(store: store, resize: { requestedHeight = $0 }, presentation: state))
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        try await Task.sleep(for: .milliseconds(100))
+        let outer = try #require(scrollViews(in: host).first)
+        let originalHeight = outer.frame.height
+        for panel in [PlayerPanel.queue, .lyrics] {
+            state.selectPanel(panel)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(requestedHeight > 500)
+            #expect(abs(outer.frame.height - originalHeight) < 1,
+                    "A newly opened reading panel must not outgrow the old native surface before the resize.")
+            window.setContentSize(NSSize(width: 400, height: requestedHeight))
+            state.windowHeight = requestedHeight
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(outer.frame.height > originalHeight)
+            state.selectPanel(nil)
+            window.setContentSize(NSSize(width: 400, height: 500))
+            state.windowHeight = 500
+            try await Task.sleep(for: .milliseconds(100))
+        }
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))

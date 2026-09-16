@@ -50,11 +50,15 @@ struct PlayerWindowSizingTests {
         #expect(state.panel == .lyrics)
     }
 
-    @Test func returningToMenuBarResetsAllSizesAndFocusRequiresDetachedLyrics() {
+    @Test func returningToMenuBarResetsAllSizesAndFocusRequiresLyrics() {
         let state = PlayerPresentation()
         state.selectPanel(.lyrics)
         state.toggleLyricsFocus()
-        #expect(!state.lyricsFocused)
+        #expect(state.lyricsFocused)
+        #expect(state.layout == .focusedLyrics)
+        #expect(state.isHeightLocked)
+        state.recordResize(600)
+        #expect(state.focusedHeight == nil)
         state.isDetached = true
         state.selectPanel(nil)
         state.recordResize(470)

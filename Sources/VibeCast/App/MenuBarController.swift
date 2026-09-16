@@ -58,6 +58,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         hosting.safeAreaRegions = []
         popover.contentViewController = hosting
         popover.contentSize = NSSize(width: 400, height: 462)
+        playerPresentation.windowHeight = popover.contentSize.height
         presentationObserver = playerPresentation.$panel
             .combineLatest(playerPresentation.$lyricsFocused, playerPresentation.$advanced)
             .dropFirst()
@@ -91,19 +92,25 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
                 self.resizePlayerWindow(window, naturalHeight: height)
                 return
             }
-            guard abs(self.popover.contentSize.height - height) > 1 else { return }
+            guard abs(self.popover.contentSize.height - height) > 1 else {
+                self.playerPresentation.windowHeight = self.popover.contentSize.height
+                return
+            }
             let window = self.popover.isShown ? self.popover.contentViewController?.view.window : nil
             let previousFrame = window?.frame
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
                 context.allowsImplicitAnimation = false
                 self.popover.contentSize = NSSize(width: 400, height: height)
-                self.popover.contentViewController?.view.layoutSubtreeIfNeeded()
                 // Preserve the position chosen when shown. Resetting positioningRect
                 // during a height change makes AppKit choose a new horizontal origin.
                 if let window, let previousFrame {
                     window.setFrameOrigin(NSPoint(x: previousFrame.minX, y: previousFrame.maxY - window.frame.height))
                 }
+                // Like the detached player, publish the allocated height only
+                // after AppKit has resized and positioned the native surface.
+                self.playerPresentation.windowHeight = height
+                self.popover.contentViewController?.view.layoutSubtreeIfNeeded()
             }
         }
     }
@@ -239,7 +246,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             playerWindow = window
         }
         guard let window = playerWindow else { return }
-        playerPresentation.resetWindowSize()
+        playerPresentation.resetWindowSize(preservingLyricsFocus: true)
         window.contentViewController = hosting
         playerPresentation.isDetached = true
         updateMaximumHeight(on: screen)
@@ -267,6 +274,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         playerPresentation.resetWindowSize()
         popover.contentViewController = hosting
         popover.contentSize = NSSize(width: 400, height: playerHeight)
+        playerPresentation.windowHeight = popover.contentSize.height
         // Snapshot the current status item before activation. In fullscreen its
         // window may already be hidden; the last visible anchor remains valid.
         let current = statusItem.button.flatMap { button in

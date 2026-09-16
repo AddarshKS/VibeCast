@@ -18,12 +18,12 @@ final class PlayerPresentation: ObservableObject {
     var layout: Layout {
         if advanced { return .standard }
         if panel == .queue { return .queue }
-        if isDetached && panel == .lyrics && lyricsFocused { return .focusedLyrics }
+        if panel == .lyrics && lyricsFocused { return .focusedLyrics }
         if panel == .lyrics { return .lyrics }
         return .standard
     }
 
-    var isHeightLocked: Bool { layout == .queue || layout == .lyrics }
+    var isHeightLocked: Bool { !isDetached || layout == .queue || layout == .lyrics }
 
     func selectPanel(_ panel: PlayerPanel?) {
         lyricsFocused = false
@@ -31,15 +31,15 @@ final class PlayerPresentation: ObservableObject {
     }
 
     func toggleLyricsFocus() {
-        guard isDetached, !advanced, panel == .lyrics else { return }
+        guard !advanced, panel == .lyrics else { return }
         lyricsFocused.toggle()
     }
 
-    func resetWindowSize() {
+    func resetWindowSize(preservingLyricsFocus: Bool = false) {
         standardHeight = nil
         focusedHeight = nil
         windowHeight = nil
-        lyricsFocused = false
+        if !preservingLyricsFocus { lyricsFocused = false }
     }
 
     func recordResize(_ height: CGFloat) {

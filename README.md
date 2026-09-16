@@ -4,12 +4,18 @@ A native macOS menu bar companion for Spotify. Find a playlist for a mood, confi
 
 **Status: local subscription beta, not a public production service.** The Mac app supports each tester's own ChatGPT subscription through local Codex. A paid API or hosted AI service is not required for this beta. Spotify access approval, Apple signing, and live account acceptance tests remain necessary before distributing a public release.
 
+**September 16, 2026 checkpoint:** the owner has accepted the UI/UX and normal player controls, including the corrected dropdown transitions. The next phase is request coverage, live playlist creation, friendlier errors, returning to suggestions after completed/declined requests, and developer-view acceptance. These request workflows are not declared complete. See [current status and next steps](docs/PROJECT_STATUS.md).
+
 ## The experience
 
 - Playback controls, song search, and playlist search talk directly to Spotify.
 - Successful player-button actions stay quiet in the normal view; failures and typed requests still get a response. Advanced history retains button diagnostics.
 - Completed replies return to suggestions after one minute without interaction. Draft text, errors, unfinished playlists, pending confirmations, and open reading panels are preserved.
 - Lyrics and queue share a stable reading viewport. Reopening lyrics for the current song reuses the in-memory result; Refresh fetches it again.
+- Timed lyrics support click-to-seek. The sparkles button opens immersive **Lyrics Mode** with a ripple transition in both dropdown and pop-out presentations. Reading scrollbars are hidden, not scrolling itself.
+- Pop out the same player into a movable, normal-level window; it is not always on top. The menu bar icon brings that window forward. Returning to the menu bar immediately opens the dropdown.
+- Width stays fixed at 400 points. Only the detached standard view and Lyrics Mode resize vertically; normal lyrics and queue use locked heights. Popping out from dropdown Lyrics Mode preserves that mode and enables vertical resizing. Redocking resets custom sizes and returns to normal lyrics.
+- Queue selections currently advance through intervening songs sequentially. Direct jumping while preserving the queue remains deferred; do not describe this as an atomic jump.
 - Every playlist recommendation waits for **Sure!**. **Cast Magic** uses the original request to make a playlist.
 - The same actions are available in the menu bar when notifications are disabled.
 - Cast Magic generates a sequence of song titles and artists, matches them locally against real Spotify results, and creates a private playlist. It never trusts AI-generated Spotify IDs.
@@ -70,7 +76,7 @@ Tests use isolated credentials and mocked HTTP/RPC services. They cover routing,
 
 `VIBECAST_TEST_CODEX=1 ./script/swift.sh test --filter SubscriptionTests` additionally starts the installed runtime with a temporary, unauthenticated home. This smoke test does not sign in, generate music, or consume model usage.
 
-`VIBECAST_TEST_PRESENTATION=1 ./script/swift.sh test --filter popoverAndSettingsHaveIndependentStableLifetimes` checks native popover clicks and independent Settings presentation in an interactive macOS session. It briefly presents test windows.
+`VIBECAST_TEST_PRESENTATION=1 ./script/swift.sh test --filter PresentationTests` checks native popover dismissal, anchoring during growth, fixed-height dropdown Lyrics Mode, preserved mode on detaching, selective resizing, and independent Settings presentation in an interactive macOS session. It briefly presents test windows. Automated geometry checks complement, rather than replace, live flicker testing.
 
 ## Distribution
 
@@ -79,6 +85,8 @@ Use [RELEASE.md](RELEASE.md) for build configuration, signing, notarization, a d
 Spotify's current [development mode](https://developer.spotify.com/documentation/web-api/concepts/quota-modes) generally allows only five approved users. Its extended-access criteria currently target established organizations with at least 250k monthly active users. A normal downloadable app cannot remove those platform restrictions. Do not market this beta as unrestricted public Spotify access.
 
 ## Architecture
+
+There is one shared `MenuBarRootView`, hosting controller, store, and presentation state. `MenuBarController` moves that existing hosting controller between the popover and the app window; it does not construct a second player. Features belong to the shared player, while the presentation layer owns dragging, dismissal, surface styling, anchoring, and resizing. Both presentations size their content against the height allocated by AppKit, preventing content from expanding ahead of the native surface.
 
 ```text
 Menu bar / notification -> Store -> RequestRouter

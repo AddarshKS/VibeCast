@@ -1,6 +1,6 @@
 # Architecture Review and Rebuild
 
-Reviewed September 2026. This review included the existing, uncommitted Milestone 4 implementation.
+Initial review: September 2026, including the then-uncommitted Milestone 4 implementation. Updated September 16 after the shared-player and Lyrics Mode work. See [current status](PROJECT_STATUS.md) for the accepted baseline and remaining request-flow work.
 
 ## Findings addressed
 
@@ -32,15 +32,31 @@ The server handles only token exchange, session issuance, and bounded playlist p
 
 The subscription beta uses the documented Codex app-server protocol, not the removed `codex exec`/computer-use fallback. It has separate Keychain sign-in, a restricted child environment, isolated home/workspace, bounded JSONL responses, request/turn deadlines, drained output pipes, cancellation, model discovery, and included-allowance checks. Authentication must be ChatGPT; failures never fall through to an API provider. See [subscription setup and limitations](SUBSCRIPTION_BETA.md).
 
+## Shared player presentation
+
+- `MenuBarController` retains one `NSHostingController<MenuBarRootView>`. Detaching transfers that controller to the normal-level `PlayerWindow`; redocking transfers it back to `NSPopover`. Store, request state, playback, and view implementation are shared.
+- `PlayerPresentation` owns selected panel, Advanced View, Lyrics Mode, allocated height, and remembered detached heights. Feature availability does not depend on detachment. Only container-specific behavior branches on `isDetached`.
+- Both surfaces constrain the content viewport to the current native height. The dropdown previously used its desired content height before its asynchronous native resize completed, unlike the detached player. It now publishes and uses the allocated height after native resizing and anchor correction. The owner reports no remaining flutter in the updated build.
+- A stable, invisible anchor panel prevents fullscreen auto-hiding menu bars from moving the popover. Local/global click monitoring handles outside clicks and right-side status icons; clicking VibeCast again closes the dropdown. These monitors do not dismiss the detached player.
+- Width is fixed at 400 points. The detached standard and focused-lyrics views resize vertically; queue and normal lyrics lock height and restore the preceding standard height when closed. The detached minimum is 405 points, capped to available screen space. Dropdown Lyrics Mode retains normal lyrics height and has no drag region.
+- The same sparkles control and reduced-motion-aware ripple transition enter/exit Lyrics Mode in both presentations. Detaching preserves active Lyrics Mode and enables its vertical resizing. Redocking resets custom sizes and focus, opens the dropdown, and retains normal lyrics selection.
+- Synced lyric text uses the same 22-point font in both layouts. Click-to-seek, playback controls, Spotify Connect switching, request composition, and developer diagnostics have one shared implementation. Queue selection still advances sequentially; direct jump research remains deferred by agreement.
+
+Presentation code is concentrated in `App/MenuBarController.swift`, `Models/PlayerPresentation.swift`, and `Views/MenuBarRootView.swift`. `Views/LyricsModeTransition.swift` owns the ripple; `Views/PlayerDetailsView.swift` and `Views/SyncedLyricsView.swift` own the shared reading content. Native presentation and visual tests cover both containers.
+
+## Remaining request work
+
+The UI/UX and normal player controls are owner-accepted, not a declaration that every request route or public-release requirement is finished. Live Cast Magic creation and musical quality remain unverified. Error presentation, terminal-request cleanup (including declined recommendations), and developer-testing usefulness need their own acceptance pass. The current idle reset deliberately preserves errors and recovery state, and declining a recommendation does not itself reset the completed request message. See the [next-phase checklist](PROJECT_STATUS.md#next-phase-request-readiness).
+
 ## Remaining external validation
 
 Follow-up usability fixes: the menu uses a retained `NSStatusItem`/`NSPopover` presentation controller rather than an embedded `MenuBarExtra` sheet. Settings has its own retained window. Spotify's callback uses bundled, self-contained branded HTML, and the supplied monochrome icon is rendered as a trimmed alpha template. The ChatGPT `persist_failed` screenshot was reproduced by overriding `HOME`; preserving the actual macOS `HOME` restores login Keychain discovery while `CODEX_HOME` remains isolated.
 
-- Live Spotify OAuth and new endpoint behavior must be tested with the configured dashboard app.
+- Spotify and ChatGPT sign-in and normal player behavior have been exercised by the owner. Live playlist creation/new write endpoints and independent tester accounts still need acceptance with the configured dashboard app.
 - Actual AI quality has not been evaluated with a live subscription or API generation request.
 - Developer ID signing, notarization, clean-install testing, and public Spotify approval require operator setup.
 - Subscription mode uses the account-advertised default model unless the user selects another; personal API mode has a configurable default. Neither is a musical-quality guarantee.
-- Native screen automation was unavailable in this environment. Offscreen AppKit renders validate content layout, but they do not capture all compositor-backed glass effects. Live light/dark-mode, accessibility, and notification testing remains required.
+- Native AppKit presentation tests and offscreen light/dark renders now cover shared-window lifetime, anchoring, sizing, and Lyrics Mode. The owner confirmed the remaining flicker is gone. These checks do not establish accessibility, every compositor/glass effect, or notification delivery on a signed distribution build; those checks remain in the release checklist.
 
 ## Sources
 

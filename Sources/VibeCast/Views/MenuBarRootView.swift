@@ -109,7 +109,7 @@ struct MenuBarRootView: View {
                             } else {
                                 PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
                                                   panel: panel, close: { self.panel = nil },
-                                                  focusLyrics: presentation.isDetached ? { toggleLyricsFocus() } : nil)
+                                                  focusLyrics: { toggleLyricsFocus() })
                             }
                         } else if store.authState.isLoggedIn && store.requestState == .idle && store.pendingPlaylistRecommendation == nil {
                             suggestions
@@ -166,10 +166,14 @@ struct MenuBarRootView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 SongIdentityView(store: store, compact: true)
-                    .overlay { SettingsDragRegion().accessibilityHidden(true) }
+                    .overlay {
+                        if presentation.isDetached { SettingsDragRegion().accessibilityHidden(true) }
+                    }
                 LyricsModeButton(active: true, action: toggleLyricsFocus)
                     .measureWandPosition("focused")
-                PlayerIconButton(title: "Return to menu bar", symbol: "arrow.down.right.and.arrow.up.left", action: toggleWindow)
+                PlayerIconButton(title: presentation.isDetached ? "Return to menu bar" : "Open player window",
+                                 symbol: presentation.isDetached ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                 action: toggleWindow)
             }
             .padding(.horizontal, 20).padding(.vertical, 18)
             GeometryReader { geometry in
@@ -196,7 +200,7 @@ struct MenuBarRootView: View {
     private var topHeight: CGFloat { measurements["top"] ?? 250 }
     private var bottomHeight: CGFloat { measurements["bottom"] ?? 92 }
     private var bodyHeight: CGFloat {
-        if presentation.isDetached, let height = presentation.windowHeight {
+        if let height = presentation.windowHeight {
             return max(0, height - topHeight - bottomHeight)
         }
         return naturalBodyHeight
