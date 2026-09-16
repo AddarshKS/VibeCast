@@ -4,6 +4,19 @@ import Testing
 
 @MainActor
 struct SeekTests {
+    @Test func scrubPositionClampsToTrackAndRejectsInvalidGeometry() {
+        #expect(PlaybackScrub.position(x: 50, width: 100, durationMS: 180001) == 90000)
+        #expect(PlaybackScrub.position(x: -40, width: 100, durationMS: 180000) == 0)
+        #expect(PlaybackScrub.position(x: 140, width: 100, durationMS: 180000) == 179999)
+        #expect(PlaybackScrub.position(x: 50, width: 0, durationMS: 180000) == nil)
+        #expect(PlaybackScrub.position(x: .nan, width: 100, durationMS: 180000) == nil)
+        #expect(PlaybackScrub.position(x: 50, width: 100, durationMS: 0) == nil)
+        let scrub = PlaybackScrub(trackURI: "original", durationMS: 180000, positionMS: 90000)
+        #expect(scrub.action(currentURI: "original", canSeek: true) == .seek(positionMS: 90000, trackURI: "original"))
+        #expect(scrub.action(currentURI: "next", canSeek: true) == nil)
+        #expect(scrub.action(currentURI: "original", canSeek: false) == nil)
+    }
+
     private let playback = #"{"is_playing":true,"shuffle_state":false,"repeat_state":"off","progress_ms":5000,"device":{"id":"mac","name":"Mac","is_active":true,"is_restricted":false},"item":{"uri":"spotify:track:song","name":"Song","artists":[],"duration_ms":180000}}"#
 
     @Test func seekUsesTimestampAndActiveDeviceWithoutReplacingContext() async throws {

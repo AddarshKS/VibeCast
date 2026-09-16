@@ -146,20 +146,29 @@ final class VibeCastStore: ObservableObject {
         } catch { fail(error) }
     }
 
-    func saveConnections(clientID: String, serviceAddress: String, apiKey: String, model: String, codexExecutable: String) {
-        guard !isBusy, !chatGPT.isBusy else { return }
-        if clientID != settings.spotifyClientID || serviceAddress != settings.serviceAddress {
+    @discardableResult
+    func saveSettings(_ draft: SettingsDraft, apiKey: String) -> Bool {
+        guard !isBusy, !chatGPT.isBusy, draft.isValid else { return false }
+        let value = draft.normalized
+        if value.clientID != settings.spotifyClientID || value.serviceAddress != settings.serviceAddress {
             logout()
-            guard !authState.isLoggedIn else { return }
+            guard latestError == nil, !authState.isLoggedIn else { return false }
         }
         do {
-            if !apiKey.isEmpty { try secrets.write(Data(apiKey.utf8), account: "openai.api-key") }
-            settings.spotifyClientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-            settings.serviceAddress = serviceAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-            settings.codexExecutable = codexExecutable.trimmingCharacters(in: .whitespacesAndNewlines)
-            settings.openAIModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !key.isEmpty { try secrets.write(Data(key.utf8), account: "openai.api-key") }
+            settings.spotifyClientID = value.clientID
+            settings.serviceAddress = value.serviceAddress
+            settings.codexExecutable = value.codexExecutable
+            settings.openAIModel = value.model
+            settings.aiProvider = value.provider
+            settings.subscriptionModel = value.subscriptionModel
+            settings.aiConsent = value.aiConsent
+            settings.notificationsEnabled = value.notificationsEnabled
+            settings.lyricsEnabled = value.lyricsEnabled
             latestError = nil
-        } catch { fail(error) }
+            return true
+        } catch { fail(error); return false }
     }
 
     func removeAPIKey() {

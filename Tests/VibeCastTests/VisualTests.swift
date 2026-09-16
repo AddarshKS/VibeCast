@@ -4,7 +4,91 @@ import Testing
 @testable import VibeCast
 
 @MainActor
+@Suite(.serialized)
 struct VisualTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func lyricsStartAtTopThenFollowTheCenterAndResetAfterSeekingBack() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        let lyrics = try #require(TimedLyrics(lrc: (0..<12).map {
+            String(format: "[00:%02d.00]Lyric line %d", $0 * 4, $0 + 1)
+        }.joined(separator: "\n")))
+        func position(_ milliseconds: Int) async {
+            api.playbackValue = SpotifyPlayback(isPlaying: false, item: PlayerTests.track,
+                device: SpotifyDevice(id: "test", name: "This Mac", isActive: true, isRestricted: false),
+                shuffleState: false, repeatState: "off", progressMS: milliseconds)
+            await store.refreshPlayback()
+        }
+        await position(0)
+        for height in [220.0, 420] {
+            let host = NSHostingView(rootView:
+                SyncedLyricsView(store: store, lyrics: lyrics, trackURI: PlayerTests.track.uri, height: height))
+            host.sizingOptions = []
+            host.safeAreaRegions = []
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: height),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = host
+            defer { window.contentView = nil }
+            await position(0)
+            try await Task.sleep(for: .milliseconds(250))
+            let scroll = try #require(scrollViews(in: host).first)
+            #expect(abs(scroll.documentVisibleRect.minY) < 1, "Opening lyrics must not scroll or leave a centered first line.")
+            await position(4000)
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(abs(scroll.documentVisibleRect.minY) < 1, "The highlight should move through opening lines without scrolling.")
+            await position(32000)
+            try await Task.sleep(for: .milliseconds(600))
+            let laterOffset = scroll.documentVisibleRect.minY
+            #expect(laterOffset > 100, "Later lyrics should resume centered following.")
+            await position(44000)
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(scroll.documentVisibleRect.minY > laterOffset + 80,
+                    "Bottom padding must allow even the final line to follow the center.")
+            await position(0)
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(abs(scroll.documentVisibleRect.minY) < 1, "Seeking back must restore the top-aligned opening.")
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
+    func normalLyricsAndFloatingControlFitInsideAllocatedReadingViewport() async throws {
+        _ = NSApplication.shared
+        let (store, api, _, _, _) = try await StoreTests().fixture(lyrics: PreviewTimedLyrics())
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track,
+            device: SpotifyDevice(id: "test", name: "This Mac", isActive: true, isRestricted: false),
+            shuffleState: false, repeatState: "off", progressMS: 74000)
+        await store.refreshPlayback()
+        store.settings.lyricsEnabled = true
+        await store.playerDetails.loadLyrics(for: PlayerTests.track, enabled: true)
+        let state = PlayerPresentation()
+        state.selectPanel(.lyrics)
+        let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state))
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 680),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        for detached in [false, true] {
+            state.isDetached = detached
+            for height in [600.0, 650, 680] {
+                state.windowHeight = height
+                window.setContentSize(NSSize(width: 400, height: height))
+                try await Task.sleep(for: .milliseconds(150))
+                host.layoutSubtreeIfNeeded()
+                let scrolls = scrollViews(in: host)
+                let outer = try #require(scrolls.first)
+                let document = try #require(outer.documentView)
+                #expect(document.frame.height <= outer.contentView.bounds.height + 1,
+                        "The floating sync control must fit inside the lyrics panel at height \(height).")
+                let lyricsScroll = try #require(scrolls.dropFirst().first)
+                let allocatedLyricsHeight = min(250, max(0, outer.contentView.bounds.height - 56))
+                #expect(abs(lyricsScroll.frame.height - allocatedLyricsHeight) < 1,
+                        "Lyrics must use the full allocated height, with no reserved sync-button row.")
+            }
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
     func renderCompactAndFocusedLyrics() async throws {
         _ = NSApplication.shared
@@ -49,6 +133,15 @@ struct VisualTests {
                              name: "popover-focused-lyrics-\(scheme)", directory: output, scheme: scheme, height: 650)
             state.toggleLyricsFocus()
         }
+        api.playbackValue = SpotifyPlayback(isPlaying: false, item: PlayerTests.track, device:
+            SpotifyDevice(id: "test", name: "This Mac", isActive: true, isRestricted: false),
+            shuffleState: false, repeatState: "off", progressMS: 0)
+        await store.refreshPlayback()
+        try await render(MenuBarRootView(store: store, presentation: state), name: "lyrics-song-start-dark",
+                         directory: output, scheme: .dark, height: 650)
+        state.toggleLyricsFocus()
+        try await render(MenuBarRootView(store: store, presentation: state), name: "focused-lyrics-song-start-dark",
+                         directory: output, scheme: .dark, height: 650)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
@@ -227,7 +320,7 @@ struct VisualTests {
                 }
             }
         }
-        #expect(colors.count > minimumColors, "The content area must render, not only the header.")
+        #expect(colors.count > minimumColors, "\(name): the content area must render, not only the header.")
         try png.write(to: directory.appendingPathComponent(name + ".png"))
         window.contentView = nil
     }

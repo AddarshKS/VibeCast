@@ -46,19 +46,7 @@ struct PlaybackControlsView: View {
     var body: some View {
         VStack(spacing: 10) {
             if let duration = store.playback?.item?.durationMS, duration > 0 {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = store.playback?.elapsedMS(observedAt: store.playbackUpdatedAt, now: context.date) ?? 0
-                    VStack(spacing: 5) {
-                        ProgressView(value: Double(elapsed), total: Double(duration))
-                            .progressViewStyle(PlaybackProgressStyle()).accessibilityLabel("Song progress")
-                        HStack {
-                            Text(time(elapsed))
-                            Spacer()
-                            Text(time(duration))
-                        }
-                        .font(.system(size: 9).monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                }
+                PlaybackSeekBar(store: store)
             }
             HStack(spacing: 0) {
                 PlayerIconButton(title: "Shuffle", symbol: "shuffle", active: store.playback?.shuffleState == true,
@@ -117,27 +105,11 @@ struct PlaybackControlsView: View {
         else { panel = panel == value ? nil : value }
     }
     private var transportPending: Bool { store.pendingPlayerAction == .pause || store.pendingPlayerAction == .resume }
-    private func time(_ milliseconds: Int) -> String {
-        let seconds = max(0, milliseconds / 1000)
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
     private var nextRepeat: SpotifyRepeatMode {
         switch store.playback?.repeatState {
         case "context": .track
         case "track": .off
         default: .context
         }
-    }
-}
-
-private struct PlaybackProgressStyle: ProgressViewStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        GeometryReader { geometry in
-            Capsule().fill(.primary.opacity(0.1))
-                .overlay(alignment: .leading) {
-                    Capsule().fill(.primary.opacity(0.55))
-                        .frame(width: geometry.size.width * (configuration.fractionCompleted ?? 0))
-                }
-        }.frame(height: 3)
     }
 }

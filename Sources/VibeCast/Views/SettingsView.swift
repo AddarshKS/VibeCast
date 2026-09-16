@@ -6,11 +6,8 @@ struct SettingsView: View {
     @ObservedObject private var subscription: ChatGPTSession
     @Environment(\.dismiss) private var dismiss
     private var close: (() -> Void)?
-    @State(initialValue: "") private var clientID: String
-    @State(initialValue: "") private var serviceAddress: String
+    @State private var draft: SettingsDraft
     @State(initialValue: "") private var apiKey: String
-    @State(initialValue: "") private var model: String
-    @State(initialValue: "") private var codexExecutable: String
     @State(initialValue: false) private var advanced: Bool
     @State(initialValue: false) private var saved: Bool
 
@@ -18,6 +15,7 @@ struct SettingsView: View {
         self.store = store
         self.settings = settings
         self.subscription = store.chatGPT
+        self._draft = State(initialValue: SettingsDraft(settings: settings))
         self.close = close
     }
 
@@ -42,18 +40,18 @@ struct SettingsView: View {
                     }
                 }
                 Section("Cast Magic") {
-                    Toggle("Enable Cast Magic", isOn: $settings.aiConsent)
+                    Toggle("Enable Cast Magic", isOn: $draft.aiConsent)
                     Text("Your musical requests are sent to OpenAI to curate songs. Spotify listening history, search results, and credentials are never included in AI prompts.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Picker("AI connection", selection: $settings.aiProvider) {
+                    Picker("AI connection", selection: $draft.provider) {
                         ForEach(AIProvider.allCases) { Text($0.title).tag($0) }
                     }
                     .disabled(store.isBusy || subscription.isBusy)
-                    if settings.aiProvider == .chatGPT {
-                        ChatGPTConnectionView(session: store.chatGPT, settings: settings, requestBusy: store.isBusy)
-                    } else if settings.aiProvider == .personalAPI {
+                    if draft.provider == .chatGPT {
+                        ChatGPTConnectionView(session: store.chatGPT, model: $draft.subscriptionModel, requestBusy: store.isBusy)
+                    } else if draft.provider == .personalAPI {
                         SecureField("API key", text: $apiKey, prompt: Text("Leave blank to keep saved key"))
-                        TextField("Model", text: $model)
+                        TextField("Model", text: $draft.model)
                         Text("API usage is billed to your OpenAI API account, separately from ChatGPT.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("Remove saved key", role: .destructive) { store.removeAPIKey() }
@@ -63,28 +61,28 @@ struct SettingsView: View {
                     }
                 }
                 Section("Notifications") {
-                    Toggle("Playlist recommendations", isOn: $settings.notificationsEnabled)
+                    Toggle("Playlist recommendations", isOn: $draft.notificationsEnabled)
                     Button("Notification settings...") {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                     }
                 }
                 Section("Lyrics") {
-                    Toggle("Use LRCLIB", isOn: $settings.lyricsEnabled)
+                    Toggle("Use LRCLIB", isOn: $draft.lyricsEnabled)
                     Text("Song title, artist, album and duration are shared with LRCLIB only while the lyrics panel is open. No Spotify credentials are shared.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
                     DisclosureGroup("Advanced", isExpanded: $advanced) {
-                        TextField("Spotify client ID", text: $clientID)
-                        TextField("VibeCast service", text: $serviceAddress, prompt: Text("https://your-service.example"))
+                        TextField("Spotify client ID", text: $draft.clientID)
+                        TextField("VibeCast service", text: $draft.serviceAddress, prompt: Text("https://your-service.example"))
                         HStack {
-                            TextField("Codex executable", text: $codexExecutable, prompt: Text("Automatic"))
+                            TextField("Codex executable", text: $draft.codexExecutable, prompt: Text("Automatic"))
                             Button {
                                 let panel = NSOpenPanel()
                                 panel.canChooseDirectories = false
                                 panel.allowsMultipleSelection = false
                                 panel.prompt = "Select Codex"
-                                if panel.runModal() == .OK { codexExecutable = panel.url?.path ?? "" }
+                                if panel.runModal() == .OK { draft.codexExecutable = panel.url?.path ?? "" }
                             } label: { Image(systemName: "folder") }
                             .help("Choose Codex executable").accessibilityLabel("Choose Codex executable")
                         }
@@ -101,16 +99,17 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
             HStack {
-                if saved { Text("Saved").font(.caption).foregroundStyle(.secondary) }
+                if saved && !hasChanges { Text("Saved").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
                 Button("Save changes") {
-                    store.saveConnections(clientID: clientID, serviceAddress: serviceAddress,
-                                          apiKey: apiKey, model: model, codexExecutable: codexExecutable)
-                    apiKey = ""
-                    saved = store.latestError == nil
+                    saved = store.saveSettings(draft, apiKey: apiKey)
+                    if saved {
+                        draft = SettingsDraft(settings: settings)
+                        apiKey = ""
+                    }
                 }
-                .modifier(PrimaryMusicButton())
-                .disabled(store.isBusy || subscription.isBusy || !validConnection)
+                .modifier(SettingsSaveButton())
+                .disabled(!hasChanges || store.isBusy || subscription.isBusy || !draft.isValid)
             }
             .padding(20)
         }
@@ -120,30 +119,41 @@ struct SettingsView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)).allowsHitTesting(false))
         .tint(.teal)
         .onAppear {
-            clientID = settings.spotifyClientID
-            serviceAddress = settings.serviceAddress
-            codexExecutable = settings.codexExecutable
-            model = settings.openAIModel
+            draft = SettingsDraft(settings: settings)
+            apiKey = ""
+            saved = false
+        }
+        .onChange(of: settings.lyricsEnabled) { old, new in
+            // Lyrics can also be enabled from the player while Settings stays open.
+            if draft.lyricsEnabled == old { draft.lyricsEnabled = new }
         }
     }
 
-    private var validConnection: Bool {
-        (clientID.isEmpty || clientID.matches("^[a-fA-F0-9]{32}$")) &&
-            (serviceAddress.isEmpty || AppConfig.serviceURL(serviceAddress) != nil) &&
-            (settings.aiProvider != .personalAPI || !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    private var hasChanges: Bool { draft.hasChanges(from: settings, apiKey: apiKey) }
+}
+
+private struct SettingsSaveButton: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if isEnabled {
+            content.modifier(PrimaryMusicButton())
+        } else {
+            content.buttonStyle(.bordered).foregroundStyle(.secondary)
+        }
     }
 }
 
 private struct ChatGPTConnectionView: View {
     @ObservedObject var session: ChatGPTSession
-    @ObservedObject var settings: AppSettings
+    @Binding var model: String
     let requestBusy: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let account = session.account {
                 Text(account.displayName).font(.callout).textSelection(.enabled)
-                Picker("Model", selection: $settings.subscriptionModel) {
+                Picker("Model", selection: $model) {
                     Text("Account default").tag("")
                     ForEach(session.models) { Text($0.displayName).tag($0.model) }
                 }

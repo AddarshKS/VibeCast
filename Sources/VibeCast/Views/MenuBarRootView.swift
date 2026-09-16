@@ -109,7 +109,9 @@ struct MenuBarRootView: View {
                             } else {
                                 PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
                                                   panel: panel, close: { self.panel = nil },
-                                                  focusLyrics: { toggleLyricsFocus() })
+                                                  focusLyrics: { toggleLyricsFocus() },
+                                                  // Reserve the 30pt header, 14pt gap, and 12pt bottom padding.
+                                                  lyricsHeight: min(250, max(0, bodyHeight - 56)))
                             }
                         } else if store.authState.isLoggedIn && store.requestState == .idle && store.pendingPlaylistRecommendation == nil {
                             suggestions
@@ -172,7 +174,7 @@ struct MenuBarRootView: View {
                 LyricsModeButton(active: true, action: toggleLyricsFocus)
                     .measureWandPosition("focused")
                 PlayerIconButton(title: presentation.isDetached ? "Return to menu bar" : "Open player window",
-                                 symbol: presentation.isDetached ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                 symbol: presentation.isDetached ? "pip.exit" : "pip.enter",
                                  active: presentation.isDetached,
                                  action: toggleWindow)
             }
@@ -225,7 +227,7 @@ struct MenuBarRootView: View {
                 if presentation.isDetached { SettingsDragRegion().accessibilityHidden(true) }
             }
             PlayerIconButton(title: presentation.isDetached ? "Return to menu bar" : "Open player window",
-                             symbol: presentation.isDetached ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                             symbol: presentation.isDetached ? "pip.exit" : "pip.enter",
                              active: presentation.isDetached,
                              action: toggleWindow)
             PlayerIconButton(title: "Settings", symbol: "slider.horizontal.3", action: openSettings)

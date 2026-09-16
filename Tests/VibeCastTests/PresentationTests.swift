@@ -354,6 +354,13 @@ struct PresentationTests {
         #expect(SpotifyCallbackPage.contentSecurityPolicy.contains("default-src 'none'"))
     }
 
+    @Test func playerWindowAndLyricsSyncSymbolsAreAvailable() {
+        for name in ["pip.enter", "pip.exit", "arrow.triangle.2.circlepath"] {
+            #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil,
+                    "Player controls must render their system symbols: \(name)")
+        }
+    }
+
     @Test func menuIconUsesTrimmedTransparentTemplateAndPreservesProportions() throws {
         let image = ResourceImage.menuBarSymbol
         #expect(image.isTemplate)

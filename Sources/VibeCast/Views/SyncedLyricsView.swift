@@ -14,7 +14,6 @@ struct SyncedLyricsView: View {
             let fresh = !store.playbackRefreshFailed && context.date.timeIntervalSince(store.playbackUpdatedAt) < 12
             let active = fresh ? lyrics.activeLine(at: position) : nil
             ScrollViewReader { proxy in
-                VStack(spacing: 4) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(lyrics.lines) { line in
@@ -37,7 +36,9 @@ struct SyncedLyricsView: View {
                                 .accessibilityAddTraits(line.id == active ? .isSelected : [])
                         }
                     }
-                    .padding(.vertical, max(30, (height - 34) / 2 - 40))
+                    // Centering clamps at the start; only the final lines need extra scroll space.
+                    .padding(.top, 8)
+                    .padding(.bottom, max(30, height / 2))
                     .padding(.horizontal, 2)
                 }
                 .scrollIndicators(.never)
@@ -50,15 +51,12 @@ struct SyncedLyricsView: View {
                             .padding(6).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                    HStack {
-                        Spacer()
-                        PlayerIconButton(title: follow ? "Pause lyric following" : "Follow song",
-                                         symbol: follow ? "location.fill" : "location", active: follow) {
-                            follow.toggle()
-                            if follow { scroll(proxy, to: active) }
-                        }
+                .overlay(alignment: .bottomTrailing) {
+                    PlayerIconButton(title: follow ? "Pause lyrics sync" : "Sync lyrics with song",
+                                     symbol: "arrow.triangle.2.circlepath", active: follow) {
+                        follow.toggle()
+                        if follow { scroll(proxy, to: active) }
                     }
-                    .frame(height: 30)
                 }
                 .onChange(of: active, initial: true) { old, value in
                     if follow && fresh { scroll(proxy, to: value, animated: old != nil) }

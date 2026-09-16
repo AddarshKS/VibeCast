@@ -9,10 +9,13 @@ A native macOS menu bar companion for Spotify. Find a playlist for a mood, confi
 ## The experience
 
 - Playback controls, song search, and playlist search talk directly to Spotify.
+- Every player progress bar supports hover highlighting, click-to-seek, and drag-to-seek with a local timestamp preview. A drag sends one guarded seek on release; seeking preserves the current play/pause state and queue.
 - Successful player-button actions stay quiet in the normal view; failures and typed requests still get a response. Advanced history retains button diagnostics.
 - Completed replies return to suggestions after one minute without interaction. Draft text, errors, unfinished playlists, pending confirmations, and open reading panels are preserved.
 - Lyrics and queue share a stable reading viewport. Reopening lyrics for the current song reuses the in-memory result; Refresh fetches it again.
 - Timed lyrics support click-to-seek. The sparkles button opens immersive **Lyrics Mode** with a ripple transition in both dropdown and pop-out presentations. Reading scrollbars are hidden, not scrolling itself.
+- The lyrics-follow button floats over the bottom-right of the lyrics in both modes without reserving a row. Its circular sync icon uses the same active accent, inactive appearance, and hover treatment as the other player buttons.
+- Lyrics begin near the top of the reading area. The highlight advances through the opening lines without scrolling until it reaches the center, then centered following takes over. Seeking back restores this opening layout in both lyrics modes.
 - Pop out the same player into a movable, normal-level window; it is not always on top. The menu bar icon brings that window forward. Returning to the menu bar immediately opens the dropdown.
 - Width stays fixed at 400 points. Only the detached standard view and Lyrics Mode resize vertically; normal lyrics and queue use locked heights. Switching containers preserves the selected panel, Lyrics Mode, Advanced View, and draft. Redocking resets only custom sizes; active Lyrics Mode returns to the dropdown at its normal fixed lyrics height.
 - Queue selections currently advance through intervening songs sequentially. Direct jumping while preserving the queue remains deferred; do not describe this as an atomic jump.
@@ -21,6 +24,7 @@ A native macOS menu bar companion for Spotify. Find a playlist for a mood, confi
 - Cast Magic generates a sequence of song titles and artists, matches them locally against real Spotify results, and creates a private playlist. It never trusts AI-generated Spotify IDs.
 - Interrupted playlist population can resume without creating a second playlist.
 - Switch between the everyday player and developer view with **Adv / Player**. The request field remains visible before sign-in. Developer view includes route/action/results, recent requests, and a copyable in-memory activity log. Settings opens in an independent window; macOS 26 uses native glass, with material fallbacks on macOS 14 and 15.
+- Settings edits remain pending until **Save changes**, which enables only for valid unsaved changes. Saving or reverting edits disables it again; a failed save preserves the draft. Account connect/disconnect and key removal remain immediate actions.
 
 ## Accounts and AI
 
