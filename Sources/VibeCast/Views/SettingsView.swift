@@ -72,27 +72,7 @@ struct SettingsView: View {
                     Text("Song title, artist, album and duration are shared with LRCLIB only while the lyrics panel is open. No Spotify credentials are shared.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section {
-                    DisclosureGroup("Advanced", isExpanded: $advanced) {
-                        TextField("Spotify client ID", text: $draft.clientID)
-                        TextField("VibeCast service", text: $draft.serviceAddress, prompt: Text("https://your-service.example"))
-                        HStack {
-                            TextField("Codex executable", text: $draft.codexExecutable, prompt: Text("Automatic"))
-                            Button {
-                                let panel = NSOpenPanel()
-                                panel.canChooseDirectories = false
-                                panel.allowsMultipleSelection = false
-                                panel.prompt = "Select Codex"
-                                if panel.runModal() == .OK { draft.codexExecutable = panel.url?.path ?? "" }
-                            } label: { Image(systemName: "folder") }
-                            .help("Choose Codex executable").accessibilityLabel("Choose Codex executable")
-                        }
-                        LabeledContent("Spotify redirect", value: AppConfig.spotifyRedirectURI).textSelection(.enabled)
-                        Text("Changing connections signs you out. Register the redirect URL in the Spotify developer dashboard.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        LabeledContent("Version", value: AppConfig.version)
-                    }
-                }
+                AdvancedSettingsSection(draft: $draft, isExpanded: $advanced)
                 if let error = store.latestError {
                     Text(error).font(.caption).foregroundStyle(.orange)
                 }
@@ -132,6 +112,53 @@ struct SettingsView: View {
     }
 
     private var hasChanges: Bool { draft.hasChanges(from: settings, apiKey: apiKey) }
+}
+
+struct AdvancedSettingsSection: View {
+    @Binding var draft: SettingsDraft
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Section {
+            if isExpanded {
+                TextField("Spotify client ID", text: $draft.clientID)
+                TextField("VibeCast service", text: $draft.serviceAddress, prompt: Text("https://your-service.example"))
+                LabeledContent("Codex executable") {
+                    HStack(spacing: 8) {
+                        TextField("Codex executable", text: $draft.codexExecutable, prompt: Text("Automatic"))
+                            .labelsHidden()
+                        Button {
+                            let panel = NSOpenPanel()
+                            panel.canChooseDirectories = false
+                            panel.allowsMultipleSelection = false
+                            panel.prompt = "Select Codex"
+                            if panel.runModal() == .OK { draft.codexExecutable = panel.url?.path ?? "" }
+                        } label: { Image(systemName: "folder") }
+                        .help("Choose Codex executable").accessibilityLabel("Choose Codex executable")
+                    }
+                }
+                LabeledContent("Spotify redirect", value: AppConfig.spotifyRedirectURI).textSelection(.enabled)
+                Text("Changing connections signs you out. Register the redirect URL in the Spotify developer dashboard.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Version", value: AppConfig.version)
+            }
+        } header: {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Advanced")
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Show or hide advanced connection settings")
+        }
+    }
 }
 
 private struct SettingsSaveButton: ViewModifier {

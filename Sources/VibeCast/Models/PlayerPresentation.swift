@@ -3,10 +3,11 @@ import Foundation
 
 @MainActor
 final class PlayerPresentation: ObservableObject {
-    enum Layout: Equatable { case standard, queue, lyrics, focusedLyrics, miniplayer }
+    enum Layout: Equatable { case standard, queue, lyrics, miniplayer }
     static let density = PlayerDensity.compact
     static let width = density.width
     static let minimumHeight: CGFloat = 344
+    static let readingHeight: CGFloat = 544
 
     @Published var isDetached = false
     @Published var maximumHeight: CGFloat = 680
@@ -18,33 +19,42 @@ final class PlayerPresentation: ObservableObject {
     }
     private(set) var queueActivation = 0
     @Published var advanced = false
-    @Published private(set) var lyricsFocused = false
     @Published private(set) var miniplayer = false
-    private(set) var focusedHeight: CGFloat?
+    @Published private(set) var miniplayerPanel: PlayerPanel?
+    private(set) var miniplayerDetailHeight: CGFloat = width
+    private(set) var miniplayerQueueActivation = 0
+    private(set) var readingHeights: [PlayerPanel: CGFloat] = [:]
 
     var layout: Layout {
         if advanced { return .standard }
         if miniplayer { return .miniplayer }
         if panel == .queue { return .queue }
-        if panel == .lyrics && lyricsFocused { return .focusedLyrics }
         if panel == .lyrics { return .lyrics }
         return .standard
     }
 
-    var isHeightLocked: Bool { !isDetached || layout != .focusedLyrics }
+    var isReading: Bool { layout == .lyrics || layout == .queue }
+    var isHeightLocked: Bool { !isDetached || !isReading }
     var showsComposer: Bool { advanced || (panel == nil && !miniplayer) }
 
     func selectPanel(_ panel: PlayerPanel?) {
-        lyricsFocused = false
+        miniplayerPanel = nil
         miniplayer = false
         self.panel = panel
     }
 
     func toggleMiniplayer() {
         advanced = false
-        lyricsFocused = false
+        miniplayerPanel = nil
         panel = nil
         miniplayer.toggle()
+    }
+
+    func toggleMiniplayerPanel(_ panel: PlayerPanel) {
+        guard miniplayer, !advanced, panel == .lyrics || panel == .queue else { return }
+        if miniplayerPanel == nil { miniplayerDetailHeight = windowHeight ?? Self.width }
+        miniplayerPanel = miniplayerPanel == panel ? nil : panel
+        if miniplayerPanel == .queue { miniplayerQueueActivation += 1 }
     }
 
     func toggleAdvanced() {
@@ -52,30 +62,25 @@ final class PlayerPresentation: ObservableObject {
         advanced.toggle()
     }
 
-    func toggleLyricsFocus() {
-        guard !advanced, panel == .lyrics else { return }
-        lyricsFocused.toggle()
-    }
-
     func resetWindowSize() {
-        focusedHeight = nil
+        readingHeights.removeAll()
         windowHeight = nil
     }
 
     func recordResize(_ height: CGFloat) {
-        guard height.isFinite, isDetached, !isHeightLocked else { return }
+        guard height.isFinite, isDetached, !isHeightLocked, let panel else { return }
         let height = constrained(height)
-        focusedHeight = height
+        readingHeights[panel] = height
         windowHeight = height
     }
 
     func desiredHeight(natural: CGFloat) -> CGFloat {
         let height: CGFloat
         switch layout {
-        case .standard, .queue, .lyrics, .miniplayer: height = natural
-        case .focusedLyrics: height = focusedHeight ?? windowHeight ?? natural
+        case .standard, .miniplayer: height = natural
+        case .queue, .lyrics: height = isDetached ? (panel.flatMap { readingHeights[$0] } ?? natural) : natural
         }
-        return layout == .focusedLyrics ? constrained(height) : min(max(1, height), maximumHeight)
+        return isReading ? constrained(height) : min(max(1, height), maximumHeight)
     }
 
     private func constrained(_ height: CGFloat) -> CGFloat {

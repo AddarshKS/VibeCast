@@ -31,7 +31,7 @@ struct PromptComposerView: View {
             .accessibilityLabel(store.showsRequestProgress ? "Cancel request" : "Send request")
         }
         .padding(.leading, density.value(13, 10)).padding(.trailing, 8).padding(.vertical, density.value(9, 6))
-        .background { if hovered { ControlHoverGlow(style: .wave) } }
+        .background { if hovered { ControlHoverGlow() } }
         .background(.background.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8)
             .strokeBorder(focused ? Color.teal.opacity(0.8) : Color.primary.opacity(hovered ? 0.15 : 0.3), lineWidth: 1)

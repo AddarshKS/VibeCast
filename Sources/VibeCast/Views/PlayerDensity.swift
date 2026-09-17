@@ -13,8 +13,6 @@ enum PlayerDensity: Hashable {
     var buttonSize: CGFloat { value(30, 28) }
     var detailSpacing: CGFloat { value(14, 10) }
     var bodyBottom: CGFloat { value(12, 8) }
-    var readingHeight: CGFloat { value(320, 250) }
-    var lyricsReserve: CGFloat { buttonSize + detailSpacing + bodyBottom }
     var lyricsFont: CGFloat { value(22, 18) }
 }
 

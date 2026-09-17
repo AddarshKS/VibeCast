@@ -4,7 +4,7 @@ struct MenuBarRootView: View {
     @ObservedObject var store: VibeCastStore
     @ObservedObject var presentation: PlayerPresentation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var wandPositions: [String: CGPoint] = [:]
+    @State private var rippleOrigins: [String: CGPoint] = [:]
     @State private var rippleOrigin = CGPoint(x: 100, y: 300)
     @State private var measurements: [String: CGFloat] = [:]
     var maximumHeight: CGFloat = 680
@@ -30,17 +30,21 @@ struct MenuBarRootView: View {
                 ScrollView {
                     MiniplayerView(store: store, presentation: presentation,
                                    toggleMiniplayer: toggleMiniplayer, toggleWindow: toggleWindow,
+                                   toggleDetail: toggleMiniplayerPanel, detailTransition: readingTransition,
                                    selectPanel: selectPanel)
                         .fixedSize(horizontal: false, vertical: true)
                         .measurePanelSection("mini")
                 }
                 .scrollIndicators(.never)
                 .frame(height: presentation.windowHeight ?? totalHeight)
-                .transition(lyricsTransition).zIndex(2)
-            } else if focused {
-                focusedPlayer.transition(lyricsTransition).zIndex(1)
+                .transition(readingTransition).zIndex(2)
+            } else if presentation.isReading, let panel {
+                ReadingPlayerView(store: store, presentation: presentation, panel: panel,
+                                  toggleMiniplayer: toggleMiniplayer, toggleWindow: toggleWindow,
+                                  selectPanel: selectPanel)
+                    .id(panel).transition(readingTransition).zIndex(1)
             } else {
-                normalPlayer.transition(lyricsTransition).zIndex(0)
+                normalPlayer.transition(readingTransition).zIndex(0)
             }
         }
         // AppKit owns the outer height. Pin content to its top even during the
@@ -51,17 +55,19 @@ struct MenuBarRootView: View {
         .modifier(DetachedPlayerSurface(enabled: presentation.isDetached))
         .tint(.teal)
         .environment(\.playerDensity, density)
-        .onPreferenceChange(WandPositions.self) { value in
-            wandPositions.merge(value, uniquingKeysWith: { _, latest in latest })
+        .onPreferenceChange(RippleOrigins.self) { value in
+            rippleOrigins.merge(value, uniquingKeysWith: { _, latest in latest })
         }
         .onPreferenceChange(PanelMeasurements.self) { value in
             if let height = value["mini"], measurements["mini"] != height { measurements["mini"] = height }
-            if !focused && !mini && !value.isEmpty {
+            if !presentation.isReading && !mini && !value.isEmpty {
                 let next = measurements.merging(value, uniquingKeysWith: { _, latest in latest })
                 if next != measurements { measurements = next }
             }
         }
         .onChange(of: totalHeight, initial: true) { _, height in resize(height) }
+        // Equal-height modes still need their native resize policy and saved size applied.
+        .onChange(of: presentation.layout) { _, _ in resize(totalHeight) }
         .onChange(of: store.prompt) { _, _ in store.noteInteraction() }
         .onChange(of: panel) { _, _ in store.noteInteraction() }
         .task {
@@ -76,10 +82,11 @@ struct MenuBarRootView: View {
         .onChange(of: store.pendingPlaylistRecommendation?.id) { _, id in
             if id != nil { panel = nil }
         }
-        .task(id: panel) {
+        .task(id: "\(panel?.rawValue ?? "player")|\(presentation.miniplayerPanel?.rawValue ?? "player")") {
             while !Task.isCancelled {
                 await store.refreshPlayback()
-                do { try await Task.sleep(for: .seconds(panel == .lyrics ? 2 : 8)) }
+                let interval = panel == .lyrics || panel == .queue || presentation.miniplayerPanel != nil ? 2 : 8
+                do { try await Task.sleep(for: .seconds(interval)) }
                 catch { return }
             }
         }
@@ -117,20 +124,11 @@ struct MenuBarRootView: View {
                             Divider()
                             DiagnosticsView(store: store)
                             DeveloperConsole(log: store.diagnostics, subscription: store.chatGPT)
-                        } else if let panel, store.authState.isLoggedIn {
+                        } else if panel == .outputs, store.authState.isLoggedIn {
                             if store.showsRequestProgress || store.latestError != nil {
                                 RequestStatusView(store: store).measurePanelSection("detail-status")
                             }
-                            if panel == .outputs {
-                                SpotifyDevicePicker(store: store, details: store.playerDetails, close: { self.panel = nil })
-                            } else {
-                                PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
-                                                  panel: panel,
-                                                  focusLyrics: { toggleLyricsFocus() },
-                                                  lyricsHeight: max(0, bodyHeight - density.lyricsReserve - detailStatusHeight),
-                                                  queueViewportHeight: max(0, bodyHeight - density.bodyBottom - detailStatusHeight),
-                                                  queueActivation: presentation.queueActivation)
-                            }
+                            SpotifyDevicePicker(store: store, details: store.playerDetails, close: { self.panel = nil })
                         } else if store.authState.isLoggedIn && store.requestState == .idle && store.pendingPlaylistRecommendation == nil {
                             suggestions
                         }
@@ -147,8 +145,8 @@ struct MenuBarRootView: View {
                 .scrollIndicators(.never)
                 .frame(height: bodyHeight)
                 .animation(nil, value: bodyHeight)
-                .onChange(of: panel) { _, value in
-                    if value != .queue { scroller.scrollTo("panel-top", anchor: .top) }
+                .onChange(of: panel) { _, _ in
+                    scroller.scrollTo("panel-top", anchor: .top)
                 }
                 .onChange(of: advanced) { _, _ in scroller.scrollTo("panel-top", anchor: .top) }
             }
@@ -175,62 +173,40 @@ struct MenuBarRootView: View {
     private var panelBinding: Binding<PlayerPanel?> {
         Binding(get: { panel }, set: { panel = $0 })
     }
-    private var focused: Bool { presentation.layout == .focusedLyrics }
     private var mini: Bool { presentation.layout == .miniplayer }
     private var density: PlayerDensity { PlayerPresentation.density }
     private var bodyMeasurementKey: String { "body-\(advanced ? "advanced" : panel?.rawValue ?? "landing")" }
 
     private func selectPanel(_ value: PlayerPanel?) {
-        withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.2)) {
+        store.noteInteraction()
+        let readingChange = presentation.isReading || value == .lyrics || value == .queue
+        let originPanel = value ?? panel
+        if let originPanel { rippleOrigin = rippleOrigins["mini-\(originPanel.rawValue)-enter"] ?? rippleOrigin }
+        withAnimation(.easeInOut(duration: reduceMotion ? 0.12 : (readingChange ? 0.45 : 0.2))) {
             presentation.selectPanel(value)
         }
     }
 
     private func toggleMiniplayer() {
         store.noteInteraction()
-        rippleOrigin = wandPositions[mini ? "mini-album" : "album"] ?? rippleOrigin
+        rippleOrigin = rippleOrigins[mini ? "mini-album" : "album"] ?? rippleOrigin
         withAnimation(.easeInOut(duration: reduceMotion ? 0.12 : 0.45)) {
             presentation.toggleMiniplayer()
         }
     }
 
-    private func toggleLyricsFocus() {
+    private func toggleMiniplayerPanel(_ panel: PlayerPanel) {
         store.noteInteraction()
-        rippleOrigin = wandPositions[focused ? "focused" : "normal"] ?? rippleOrigin
+        let direction = presentation.miniplayerPanel == panel ? "exit" : "enter"
+        rippleOrigin = rippleOrigins["mini-\(panel.rawValue)-\(direction)"]
+            ?? CGPoint(x: density.width / 2, y: density.width / 2)
         withAnimation(.easeInOut(duration: reduceMotion ? 0.12 : 0.45)) {
-            presentation.toggleLyricsFocus()
+            presentation.toggleMiniplayerPanel(panel)
         }
     }
 
-    private var lyricsTransition: AnyTransition {
+    private var readingTransition: AnyTransition {
         reduceMotion ? .opacity : .ripple(from: rippleOrigin)
-    }
-
-    private var focusedPlayer: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                SongIdentityView(store: store, compact: true, artworkAction: toggleMiniplayer,
-                                 draggable: presentation.isDetached)
-                LyricsModeButton(active: true, action: toggleLyricsFocus)
-                    .measureWandPosition("focused")
-                PlayerWindowButton(detached: presentation.isDetached, action: toggleWindow)
-            }
-            .padding(.horizontal, density.inset).padding(.vertical, density.value(18, 12))
-            GeometryReader { geometry in
-                PlayerDetailsView(store: store, details: store.playerDetails, settings: store.settings,
-                                  panel: .lyrics, focused: true,
-                                  lyricsHeight: geometry.size.height)
-                    .padding(.horizontal, density.value(24, 16))
-            }
-            .clipped()
-            VStack(spacing: 10) {
-                if store.latestError != nil { RequestStatusView(store: store) }
-                PlaybackControlsView(store: store, panel: panelBinding, selectPanel: { panel = $0 })
-            }
-            .padding(.horizontal, density.value(36, 26)).padding(.top, density.value(14, 10)).padding(.bottom, density.value(16, 12))
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxHeight: .infinity)
     }
 
     private var hasRequestStatus: Bool {
@@ -239,9 +215,6 @@ struct MenuBarRootView: View {
     }
     private var topHeight: CGFloat { measurements["top"] ?? density.value(250, 220) }
     private var bottomHeight: CGFloat { presentation.showsComposer ? (measurements["bottom"].flatMap { $0 > 0 ? $0 : nil } ?? 60) : 0 }
-    private var detailStatusHeight: CGFloat {
-        store.showsRequestProgress || store.latestError != nil ? (measurements["detail-status"] ?? 0) + density.value(16, 12) : 0
-    }
     private var bodyHeight: CGFloat {
         if let height = presentation.windowHeight {
             return max(0, height - topHeight - bottomHeight)
@@ -249,13 +222,13 @@ struct MenuBarRootView: View {
         return naturalBodyHeight
     }
     private var naturalBodyHeight: CGFloat {
-        let readingPanel = !advanced && (panel == .lyrics || panel == .queue)
         return PanelSizing.bodyHeight(content: max(!advanced && panel == nil ? 114 : 0, measurements[bodyMeasurementKey] ?? 120),
-                                      top: topHeight, bottom: bottomHeight, maximum: min(maximumHeight, presentation.maximumHeight),
-                                      readingPanel: readingPanel, readingHeight: density.readingHeight + 50)
+                                      top: topHeight, bottom: bottomHeight, maximum: min(maximumHeight, presentation.maximumHeight))
     }
     private var totalHeight: CGFloat {
-        mini ? min(ceil(measurements["mini"] ?? 390), presentation.maximumHeight) : ceil(topHeight + naturalBodyHeight + bottomHeight)
+        if mini { return min(ceil(measurements["mini"] ?? PlayerPresentation.width), presentation.maximumHeight) }
+        if presentation.isReading { return min(PlayerPresentation.readingHeight, presentation.maximumHeight) }
+        return ceil(topHeight + naturalBodyHeight + bottomHeight)
     }
 
     private var header: some View {
@@ -277,9 +250,9 @@ struct MenuBarRootView: View {
     private var suggestions: some View {
         VStack(alignment: .leading, spacing: density.value(10, 6)) {
             Text("A little inspiration").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            ForEach([("Late-night drive", "moon.stars", "late night driving"),
-                     ("A little focus", "headphones", "find a focus playlist"),
-                     ("Something with energy", "bolt", "play some EDM songs")], id: \.0) { title, icon, prompt in
+            ForEach([("Long Drive Night", "moon.stars", "late night driving"),
+                     ("Need to Focus", "headphones", "find a focus playlist"),
+                     ("Play Something Energetic", "bolt", "play some EDM songs")], id: \.0) { title, icon, prompt in
                 Button {
                     store.prompt = prompt
                     store.submitPrompt()
@@ -288,7 +261,6 @@ struct MenuBarRootView: View {
                         Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary)
                         Text(title)
                         Spacer()
-                        Image(systemName: "arrow.up.left").font(.caption).foregroundStyle(.tertiary)
                     }
                     .contentShape(Rectangle())
                     .padding(.vertical, density.value(5, 4))
@@ -372,12 +344,14 @@ struct CoverArtwork: View {
     let size: CGFloat
     var symbol = "waveform"
     var body: some View {
-        AsyncImage(url: url) { image in
-            image.resizable().scaledToFit()
-        } placeholder: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6).fill(.quaternary)
-                Image(systemName: symbol).font(.system(size: size * 0.35, weight: .light)).foregroundStyle(.teal)
+        PlayerArtwork(url: url) { image in
+            if let image {
+                image.resizable().scaledToFit()
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6).fill(.quaternary)
+                    Image(systemName: symbol).font(.system(size: size * 0.35, weight: .light)).foregroundStyle(.teal)
+                }
             }
         }
         .frame(width: size, height: size)

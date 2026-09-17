@@ -18,7 +18,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var pendingPopoverHeight: CGFloat?
     private var resizeScheduled = false
     private var interactionMonitor: Any?
-    private var presentationObserver: AnyCancellable?
     private var subscriptionObserver: AnyCancellable?
     private weak var statusMenu: NSMenu?
     private var adjustingWindow = false
@@ -62,14 +61,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.contentViewController = hosting
         popover.contentSize = NSSize(width: PlayerPresentation.width, height: playerHeight)
         playerPresentation.windowHeight = popover.contentSize.height
-        presentationObserver = playerPresentation.$panel
-            .combineLatest(playerPresentation.$lyricsFocused, playerPresentation.$advanced)
-            .combineLatest(playerPresentation.$miniplayer)
-            .dropFirst()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                self.resizePopover(self.playerHeight)
-            }
         interactionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
             if let self, let window = self.hosting.view.window,
                (self.popover.isShown || self.playerPresentation.isDetached), event.window === window {
@@ -415,7 +406,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         if locked { window.styleMask.remove(.resizable) }
         else { window.styleMask.insert(.resizable) }
         // Release old limits before applying the next mode's frame, then lock
-        // reading panels to that frame. Programmatic layout never becomes a user size.
+        // non-resizable panels to that frame. Programmatic layout never becomes a user size.
         window.minSize = NSSize(width: PlayerPresentation.width, height: locked ? 1 : min(PlayerPresentation.minimumHeight, playerPresentation.maximumHeight))
         window.maxSize = NSSize(width: PlayerPresentation.width, height: playerPresentation.maximumHeight)
         let frame = window.frame
@@ -484,7 +475,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     func close() {
         stopPopoverDismissalMonitoring()
-        presentationObserver = nil
         subscriptionObserver = nil
         if let settingsActivationObserver { NotificationCenter.default.removeObserver(settingsActivationObserver) }
         settingsActivationObserver = nil

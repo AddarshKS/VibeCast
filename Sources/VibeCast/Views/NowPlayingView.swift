@@ -11,7 +11,7 @@ struct NowPlayingView: View {
     var body: some View {
         VStack(spacing: density.value(10, 8)) {
             HStack(alignment: .top, spacing: 4) {
-                SongIdentityView(store: store, artworkAction: toggleMiniplayer)
+                SongIdentityView(store: store, artworkAction: toggleMiniplayer, draggable: detached)
                 PlayerWindowButton(detached: detached, action: toggleWindow)
             }
             PlaybackControlsView(store: store, panel: $panel)
@@ -33,7 +33,7 @@ struct SongIdentityView: View {
                 if let artworkAction {
                     AlbumArtworkButton(url: store.playback?.item?.resolvedTrack.artworkURL,
                                        size: compact ? 40 : density.value(64, 48), action: artworkAction)
-                        .measureWandPosition("album")
+                        .measureRippleOrigin("album")
                 } else {
                     CoverArtwork(url: store.playback?.item?.resolvedTrack.artworkURL, size: compact ? 40 : density.value(64, 48))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -103,8 +103,10 @@ struct PlaybackControlsView: View {
                     .disabled(store.isBusy)
                 Spacer(minLength: 4)
                 PlayerIconButton(title: "Lyrics", symbol: "quote.bubble", active: panel == .lyrics) { toggle(.lyrics) }
+                    .measureRippleOrigin("mini-lyrics-enter")
                 Spacer(minLength: 4)
                 PlayerIconButton(title: "Up next", symbol: "list.bullet", active: panel == .queue) { toggle(.queue) }
+                    .measureRippleOrigin("mini-queue-enter")
             }
             Button { toggle(.outputs) } label: {
                 HStack(spacing: 5) {

@@ -27,6 +27,7 @@ final class FakeSpotify: SpotifyServing {
     var playbackReply: CheckedContinuation<SpotifyPlayback?, Never>?
     var playbackReads = 0
     var queueValue: [SpotifyQueueItem] = []
+    var queueReads = 0
     var previousItems: [SpotifyTrack] = []
     var deviceValues: [SpotifyDevice] = []
     func devices() async throws -> [SpotifyDevice] { deviceValues }
@@ -40,6 +41,7 @@ final class FakeSpotify: SpotifyServing {
         return playbackValue
     }
     func queue() async throws -> [SpotifyQueueItem] {
+        queueReads += 1
         if holdQueue { return await withCheckedContinuation { queueReply = $0 } }
         if queueFailure { throw UserFacingError("Queue unavailable") }
         return queueValue

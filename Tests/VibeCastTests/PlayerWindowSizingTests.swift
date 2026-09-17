@@ -3,18 +3,6 @@ import Testing
 
 @MainActor
 struct PlayerWindowSizingTests {
-    @Test func lyricsModePulsesOnlyBeforeEntering() throws {
-        for active in [false, true] {
-            for hintHovered in [false, true] {
-                let button = LyricsModeButton(active: active, hintHovered: hintHovered, action: {})
-                let control = try #require(button.body as? PlayerIconButton)
-                #expect(control.active == active)
-                #expect(control.pulsesOnHover == !active)
-                #expect(control.externallyHovered == hintHovered)
-            }
-        }
-    }
-
     @Test func queueActivationChangesOnlyWhenOpeningTheQueue() {
         let state = PlayerPresentation()
         state.selectPanel(.queue)
@@ -36,50 +24,52 @@ struct PlayerWindowSizingTests {
         let row = density.width - 2 * density.inset - 24
         #expect(6 * density.buttonSize + 38 + 6 * 4 <= row)
         #expect(density.buttonSize >= 28)
-        #expect(density.lyricsReserve == 46)
     }
 
-    @Test func onlyDetachedFocusedLyricsAcceptsManualResizing() {
+    @Test func onlyDetachedReadingModesAcceptManualResizing() {
         let state = PlayerPresentation()
         for detached in [false, true] {
             state.isDetached = detached
-            for panel in [nil, PlayerPanel.queue, .lyrics, .outputs] {
+            for panel in [nil, PlayerPanel.outputs] {
                 state.selectPanel(panel)
                 #expect(state.isHeightLocked)
                 state.recordResize(500)
-                #expect(state.focusedHeight == nil)
+                #expect(state.readingHeights.isEmpty)
                 #expect(state.desiredHeight(natural: 350) == 350)
                 #expect(state.desiredHeight(natural: 480) == 480)
             }
             state.toggleMiniplayer()
             #expect(state.isHeightLocked)
             state.recordResize(500)
-            #expect(state.focusedHeight == nil)
-            state.selectPanel(.lyrics)
-            state.toggleLyricsFocus()
-            #expect(state.isHeightLocked == !detached)
-            state.recordResize(500)
-            #expect(state.focusedHeight == (detached ? 500 : nil))
+            #expect(state.readingHeights.isEmpty)
+            for panel in [PlayerPanel.lyrics, .queue] {
+                state.selectPanel(panel)
+                #expect(state.isHeightLocked == !detached)
+                state.recordResize(500)
+                #expect(state.readingHeights[panel] == (detached ? 500 : nil))
+            }
             state.resetWindowSize()
         }
     }
 
-    @Test func lyricsSizeIsRememberedOnlyUntilRedocking() {
+    @Test func readingSizesAreIndependentAndRememberedOnlyUntilRedocking() {
         let state = PlayerPresentation()
         state.isDetached = true
         state.selectPanel(.lyrics)
         state.windowHeight = 540
-        state.toggleLyricsFocus()
         #expect(state.desiredHeight(natural: 540) == 540)
         state.recordResize(620)
-        state.toggleLyricsFocus()
+        state.selectPanel(.queue)
         #expect(state.desiredHeight(natural: 540) == 540)
-        state.toggleLyricsFocus()
+        state.recordResize(460)
+        state.selectPanel(.lyrics)
         #expect(state.desiredHeight(natural: 540) == 620)
+        state.selectPanel(.queue)
+        #expect(state.desiredHeight(natural: 540) == 460)
         state.isDetached = false
         state.resetWindowSize()
-        #expect(state.lyricsFocused)
-        #expect(state.focusedHeight == nil)
+        #expect(state.isReading)
+        #expect(state.readingHeights.isEmpty)
         #expect(state.desiredHeight(natural: 540) == 540)
     }
 
@@ -101,9 +91,8 @@ struct PlayerWindowSizingTests {
     @Test func miniplayerSurvivesContainerChangesAndPanelActionsExitIt() {
         let state = PlayerPresentation()
         state.selectPanel(.lyrics)
-        state.toggleLyricsFocus()
         state.toggleMiniplayer()
-        #expect(state.layout == .miniplayer && !state.lyricsFocused && state.panel == nil)
+        #expect(state.layout == .miniplayer && !state.isReading && state.panel == nil)
         for detached in [true, false, true] {
             state.isDetached = detached
             state.resetWindowSize()
@@ -119,11 +108,10 @@ struct PlayerWindowSizingTests {
         #expect(state.layout == .standard && state.panel == nil)
     }
 
-    @Test func focusedHeightIsClampedToScreenAndMinimum() {
+    @Test(arguments: [PlayerPanel.lyrics, .queue]) func readingHeightIsClampedToScreenAndMinimum(panel: PlayerPanel) {
         let state = PlayerPresentation()
         state.isDetached = true
-        state.selectPanel(.lyrics)
-        state.toggleLyricsFocus()
+        state.selectPanel(panel)
         state.recordResize(100)
         #expect(state.desiredHeight(natural: 500) == 344)
         state.recordResize(10000)

@@ -4,7 +4,7 @@ struct RaisedPlayerSurface: ViewModifier {
     var artworkURL: URL? = nil
     func body(content: Content) -> some View {
         content
-            .modifier(ArtworkAccent(url: artworkURL, panel: true))
+            .modifier(ArtworkAccent(url: artworkURL))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8).strokeBorder(
@@ -13,18 +13,6 @@ struct RaisedPlayerSurface: ViewModifier {
                     .allowsHitTesting(false)
             }
             .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 5)
-    }
-}
-
-struct LyricsModeButton: View {
-    var active = false
-    var hintHovered = false
-    var action: () -> Void
-
-    var body: some View {
-        PlayerIconButton(title: active ? "Exit Lyrics Mode" : "Enter Lyrics Mode",
-                         symbol: "sparkles", active: active, symbolSize: 16,
-                         externallyHovered: hintHovered, pulsesOnHover: !active, action: action)
     }
 }
 
@@ -40,7 +28,6 @@ struct PlayerWindowButton: View {
 struct AlbumArtworkButton: View {
     let url: URL?
     let size: CGFloat
-    var miniplayer = false
     var action: () -> Void
     @State private var hovered = false
 
@@ -54,8 +41,8 @@ struct AlbumArtworkButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .help(miniplayer ? "Return to player" : "Open miniplayer")
-        .accessibilityLabel(miniplayer ? "Return to player" : "Open miniplayer")
+        .help("Open miniplayer")
+        .accessibilityLabel("Open miniplayer")
     }
 }
 
@@ -66,8 +53,6 @@ struct PlayerIconButton: View {
     var active = false
     var pending = false
     var symbolSize: CGFloat = 13
-    var externallyHovered = false
-    var pulsesOnHover = false
     var action: () -> Void
     @State private var hovered = false
 
@@ -80,13 +65,8 @@ struct PlayerIconButton: View {
                 .font(.system(size: symbolSize, weight: .medium))
                 .foregroundStyle(active ? Color.teal : Color.primary.opacity(0.8))
                 .frame(width: density.buttonSize, height: density.buttonSize)
-                .background(active ? Color.teal.opacity(0.13) : Color.primary.opacity(hovered || externallyHovered ? 0.07 : 0),
+                .background(active ? Color.teal.opacity(0.13) : Color.primary.opacity(hovered ? 0.07 : 0),
                             in: RoundedRectangle(cornerRadius: 6))
-                .background {
-                    if pulsesOnHover && (hovered || externallyHovered) {
-                        ControlHoverGlow(style: .pulse, cornerRadius: 6)
-                    }
-                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
