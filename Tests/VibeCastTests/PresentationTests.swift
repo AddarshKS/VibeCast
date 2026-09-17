@@ -7,7 +7,102 @@ import Testing
 @Suite(.serialized)
 struct PresentationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
-    func dropdownReadingPanelsAndLyricsModeKeepTheirAnchorAndAllocatedHeight() async throws {
+    func repeatedMiniplayerRipplesKeepNativeSizeAndAnchorStable() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        let screen = try #require(NSScreen.main)
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        let controller = MenuBarController(store: store)
+        defer { controller.close() }
+        controller.showPopover(anchoredAt: NSRect(x: screen.visibleFrame.maxX - 100,
+                                                y: screen.visibleFrame.maxY - 24, width: 36, height: 22))
+        try await Task.sleep(for: .milliseconds(200))
+        let state = controller.playerPresentation
+        for detached in [false, true] {
+            if detached { controller.togglePlayerWindow() }
+            try await Task.sleep(for: .milliseconds(200))
+            let window = try #require(detached ? controller.playerWindow : controller.popover.contentViewController?.view.window)
+            let anchor = window.frame
+            let landingHeight = try #require(state.windowHeight)
+            for detail in [PlayerPanel.lyrics, .queue] {
+                for action in 0..<4 {
+                    withAnimation(.easeInOut(duration: 0.45)) {
+                        if action == 0 || action == 3 { state.toggleMiniplayer() }
+                        else { state.toggleMiniplayerPanel(detail) }
+                    }
+                    var heights: [CGFloat] = []
+                    for _ in 0..<32 {
+                        try await Task.sleep(for: .milliseconds(16))
+                        #expect(abs(window.frame.minX - anchor.minX) < 2)
+                        #expect(abs(window.frame.maxY - anchor.maxY) < 2)
+                        #expect(window.isVisible)
+                        let height = try #require(state.windowHeight)
+                        if heights.last != height { heights.append(height) }
+                    }
+                    #expect(heights.count <= 2, "A ripple must not bounce between competing layout heights.")
+                    #expect(abs(try #require(state.windowHeight) - (action == 3 ? landingHeight : 340)) < 1)
+                    if action == 1 || action == 2 { #expect(heights == [340]) }
+                }
+            }
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"), arguments: [PlayerPanel.lyrics, .queue])
+    func miniplayerDetailsKeepTheSamePlayerAndAnchor(panel: PlayerPanel) async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.finishLaunching()
+        let screen = try #require(NSScreen.main)
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        let controller = MenuBarController(store: store)
+        defer { controller.close() }
+        controller.showPopover(anchoredAt: NSRect(x: screen.visibleFrame.maxX - 100,
+                                                y: screen.visibleFrame.maxY - 24, width: 36, height: 22))
+        controller.playerPresentation.toggleMiniplayer()
+        try await Task.sleep(for: .milliseconds(200))
+        let host = try #require(controller.popover.contentViewController)
+        let original = try #require(host.view.window).frame
+        #expect(controller.popover.contentSize == NSSize(width: 340, height: 340))
+        #expect(abs(try #require(host.view.window).frame.maxY - original.maxY) < 2)
+        #expect(abs(try #require(host.view.window).frame.minX - original.minX) < 2)
+        withAnimation(.easeInOut(duration: 0.1)) { controller.playerPresentation.toggleMiniplayerPanel(panel) }
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(controller.popover.contentSize == NSSize(width: 340, height: 340))
+        #expect(abs(try #require(host.view.window).frame.maxY - original.maxY) < 2)
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(200))
+        let window = try #require(controller.playerWindow)
+        #expect(window.contentViewController === host)
+        #expect(window.frame.size == NSSize(width: 340, height: 340))
+        #expect(!window.styleMask.contains(.resizable))
+        #expect(controller.playerPresentation.miniplayer)
+        #expect(controller.playerPresentation.miniplayerPanel == panel)
+        controller.returnToMenuBar()
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(controller.popover.isShown)
+        #expect(controller.popover.contentViewController === host)
+        #expect(controller.playerPresentation.miniplayer)
+        #expect(controller.playerPresentation.miniplayerPanel == panel)
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.contentViewController === host)
+        controller.playerPresentation.toggleMiniplayerPanel(panel)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!controller.playerPresentation.isReading)
+        #expect(window.frame.size == NSSize(width: 340, height: 340))
+        #expect(controller.playerPresentation.miniplayer)
+        #expect(controller.playerPresentation.miniplayerPanel == nil)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
+    func dropdownReadingModesKeepTheirAnchorAndAllocatedHeight() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
@@ -25,39 +120,23 @@ struct PresentationTests {
         let initial = window.frame
         let state = controller.playerPresentation
         for panel in [PlayerPanel.queue, .lyrics, .queue, .lyrics] {
-            state.selectPanel(panel)
+            withAnimation(.easeInOut(duration: 0.45)) { state.selectPanel(panel) }
             // Sample throughout growth, not just its settled frame.
-            for _ in 0..<20 {
-                try await Task.sleep(for: .milliseconds(8))
+            for _ in 0..<32 {
+                try await Task.sleep(for: .milliseconds(16))
                 #expect(controller.popover.isShown)
                 #expect(abs(window.frame.minX - initial.minX) < 2)
                 #expect(abs(window.frame.maxY - initial.maxY) < 2)
                 #expect(state.windowHeight == controller.popover.contentSize.height)
             }
             #expect(window.frame.height > initial.height)
-            if panel == .lyrics {
-                let lyricsFrame = window.frame
-                for _ in 0..<2 {
-                    withAnimation(.easeInOut(duration: 0.45)) { state.toggleLyricsFocus() }
-                    #expect(state.layout == .focusedLyrics)
-                    #expect(state.isHeightLocked)
-                    for _ in 0..<30 {
-                        try await Task.sleep(for: .milliseconds(16))
-                        #expect(window.frame == lyricsFrame)
-                        #expect(controller.popover.isShown)
-                    }
-                    withAnimation(.easeInOut(duration: 0.45)) { state.toggleLyricsFocus() }
-                    try await Task.sleep(for: .milliseconds(500))
-                    #expect(window.frame == lyricsFrame)
-                }
-            }
-            state.selectPanel(nil)
-            try await Task.sleep(for: .milliseconds(150))
+            #expect(state.isHeightLocked)
+            #expect(controller.popover.contentSize.height == PlayerPresentation.readingHeight)
+            withAnimation(.easeInOut(duration: 0.45)) { state.selectPanel(nil) }
+            try await Task.sleep(for: .milliseconds(500))
             #expect(abs(window.frame.height - initial.height) < 2)
         }
         state.selectPanel(.lyrics)
-        try await Task.sleep(for: .milliseconds(150))
-        state.toggleLyricsFocus()
         try await Task.sleep(for: .milliseconds(150))
         let dropdownHeight = controller.popover.contentSize.height
         let host = controller.popover.contentViewController
@@ -65,30 +144,33 @@ struct PresentationTests {
         try await Task.sleep(for: .milliseconds(150))
         let player = try #require(controller.playerWindow)
         #expect(player.contentViewController === host)
-        #expect(state.layout == .focusedLyrics)
-        #expect(player.frame.height == dropdownHeight)
+        #expect(state.layout == .lyrics)
+        let detachedHeight = player.frame.height
+        #expect(detachedHeight == dropdownHeight)
+        #expect(player.frame.width == 340)
+        #expect(controller.popover.contentSize.width == 340)
         #expect(!state.isHeightLocked)
         #expect(player.styleMask.contains(.resizable))
-        #expect(controller.windowWillResize(player, to: NSSize(width: 700, height: 200)) == NSSize(width: 400, height: 405))
-        player.setContentSize(NSSize(width: 400, height: 540))
+        #expect(controller.windowWillResize(player, to: NSSize(width: 700, height: 200)) == NSSize(width: 340, height: 344))
+        player.setContentSize(NSSize(width: 340, height: 540))
         try await Task.sleep(for: .milliseconds(100))
-        #expect(state.focusedHeight == 540)
+        #expect(state.readingHeights[.lyrics] == 540)
         controller.returnToMenuBar()
         try await Task.sleep(for: .milliseconds(150))
-        #expect(state.layout == .focusedLyrics)
-        #expect(state.focusedHeight == nil)
+        #expect(state.layout == .lyrics)
+        #expect(state.readingHeights.isEmpty)
         #expect(state.isHeightLocked)
         #expect(controller.popover.contentSize.height == dropdownHeight)
         #expect(controller.popover.contentViewController === host)
         #expect(controller.popover.isShown)
         controller.togglePlayerWindow()
         try await Task.sleep(for: .milliseconds(150))
-        #expect(state.layout == .focusedLyrics)
-        #expect(player.frame.height == dropdownHeight)
+        #expect(state.layout == .lyrics)
+        #expect(player.frame.height == detachedHeight)
         #expect(player.styleMask.contains(.resizable))
         controller.returnToMenuBar()
         try await Task.sleep(for: .milliseconds(150))
-        #expect(state.layout == .focusedLyrics)
+        #expect(state.layout == .lyrics)
 
         store.prompt = "Keep this draft through every presentation"
         for panel in [nil, PlayerPanel.queue, .lyrics, .outputs] {
@@ -278,65 +360,92 @@ struct PresentationTests {
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_TEST_PRESENTATION"] == "1"))
-    func detachedWindowResizesOnlyVerticallyAndRestoresHeightAcrossPanels() async throws {
+    func detachedReadingModesResizeIndependentlyAndOtherScreensFitAutomatically() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         NSApp.finishLaunching()
         let screen = try #require(NSScreen.main)
-        let (store, _, _, _, _) = try await StoreTests().fixture()
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: nil,
+                                           shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
         let controller = MenuBarController(store: store)
         defer { controller.close() }
-        controller.popover.behavior = .applicationDefined
         controller.showPopover(anchoredAt: NSRect(x: screen.visibleFrame.maxX - 100,
                                                 y: screen.visibleFrame.maxY - 24, width: 36, height: 22))
-        try await Task.sleep(for: .milliseconds(150))
-        controller.togglePlayerWindow()
-        try await Task.sleep(for: .milliseconds(150))
-        let window = try #require(controller.playerWindow)
+        try await Task.sleep(for: .milliseconds(200))
         let state = controller.playerPresentation
-        #expect(window.styleMask.contains(.resizable))
-        #expect(controller.windowWillResize(window, to: NSSize(width: 900, height: 200)) == NSSize(width: 400, height: 405))
-        let originalTop = window.frame.maxY
-        window.setFrame(NSRect(x: window.frame.minX, y: originalTop - 405, width: 400, height: 405), display: true)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(state.standardHeight == 405)
-        let customFrame = window.frame
+        let host = controller.popover.contentViewController
+        let landingHeight = controller.popover.contentSize.height
+        controller.togglePlayerWindow()
+        try await Task.sleep(for: .milliseconds(200))
+        let window = try #require(controller.playerWindow)
+        let original = window.frame
+        #expect(window.frame.height == landingHeight)
+        #expect(!window.styleMask.contains(.resizable))
+        #expect(controller.windowWillResize(window, to: NSSize(width: 900, height: 200)) == window.frame.size)
         for panel in [PlayerPanel.queue, .lyrics, .queue, .lyrics] {
-            state.selectPanel(panel)
-            try await Task.sleep(for: .milliseconds(150))
-            #expect(window.frame.height > 405)
-            #expect(!window.styleMask.contains(.resizable))
-            #expect(window.frame.width == 400)
-            #expect(abs(window.frame.maxY - customFrame.maxY) < 2)
-            #expect(abs(window.frame.minX - customFrame.minX) < 2)
-            #expect(controller.windowWillResize(window, to: NSSize(width: 600, height: 420)) == window.frame.size)
-            state.selectPanel(nil)
-            try await Task.sleep(for: .milliseconds(150))
-            #expect(window.frame.height == 405)
+            withAnimation(.easeOut(duration: 0.2)) { state.selectPanel(panel) }
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(window.frame.height > landingHeight)
             #expect(window.styleMask.contains(.resizable))
-            #expect(controller.windowWillResize(window, to: NSSize(width: 100, height: 200)) == NSSize(width: 400, height: 405))
+            #expect(window.frame.width == 340)
+            #expect(abs(window.frame.maxY - original.maxY) < 2)
+            #expect(abs(window.frame.minX - original.minX) < 2)
+            #expect(controller.windowWillResize(window, to: NSSize(width: 600, height: 420)) == NSSize(width: 340, height: 420))
+            #expect(!state.showsComposer)
+            state.selectPanel(nil)
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(window.frame.height == landingHeight)
+            #expect(!window.styleMask.contains(.resizable))
         }
         state.selectPanel(.lyrics)
-        state.toggleLyricsFocus()
-        try await Task.sleep(for: .milliseconds(150))
-        window.setContentSize(NSSize(width: 400, height: 540))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.styleMask.contains(.resizable))
+        #expect(controller.windowWillResize(window, to: NSSize(width: 900, height: 200)) == NSSize(width: 340, height: 344))
+        window.setContentSize(NSSize(width: 340, height: 620))
         try await Task.sleep(for: .milliseconds(100))
-        #expect(state.focusedHeight == 540)
-        state.toggleLyricsFocus()
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(window.frame.height > 405)
-        #expect(!window.styleMask.contains(.resizable))
+        #expect(state.readingHeights[.lyrics] == 620)
+        state.selectPanel(.queue)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.frame.height == PlayerPresentation.readingHeight)
+        #expect(window.styleMask.contains(.resizable))
+        window.setContentSize(NSSize(width: 340, height: 460))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.readingHeights[.queue] == 460)
+        state.selectPanel(.lyrics)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.frame.height == 620)
+        state.selectPanel(.queue)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.frame.height == 460)
         state.selectPanel(nil)
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(window.frame.height == 405)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(window.frame.height == landingHeight)
+        store.prompt = "Keep my draft"
+        state.toggleMiniplayer()
+        try await Task.sleep(for: .milliseconds(200))
+        let miniHeight = window.frame.height
+        #expect(miniHeight <= landingHeight)
+        #expect(!window.styleMask.contains(.resizable))
+        for _ in 0..<2 {
+            controller.returnToMenuBar()
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(state.layout == .miniplayer)
+            #expect(controller.popover.contentSize.height == miniHeight)
+            #expect(controller.popover.contentViewController === host)
+            controller.togglePlayerWindow()
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(state.layout == .miniplayer)
+            #expect(window.contentViewController === host)
+            #expect(window.frame.height == miniHeight)
+        }
+        state.toggleMiniplayer()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(state.showsComposer && store.prompt == "Keep my draft")
         controller.returnToMenuBar()
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(controller.popover.isShown)
-        #expect(state.standardHeight == nil && state.focusedHeight == nil)
-        let natural = controller.popover.contentSize.height
-        controller.togglePlayerWindow()
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(window.frame.height == max(405, natural))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(controller.popover.isShown && state.readingHeights.isEmpty)
     }
 
     @Test func callbackPagesAreBrandedAndNeverClaimPrematureConnectionSuccess() throws {
@@ -441,7 +550,7 @@ struct PresentationTests {
         // A command-line test runner cannot reliably take foreground activation.
         #expect(window.canBecomeKey)
         // A real mouse event inside the composer must not dismiss the popover.
-        for point in [NSPoint(x: 80, y: 60), NSPoint(x: 350, y: 17), NSPoint(x: 350, y: 17)] {
+        for point in [NSPoint(x: 80, y: 60), NSPoint(x: 390, y: 17), NSPoint(x: 390, y: 17)] {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = try #require(NSEvent.mouseEvent(with: type, location: point,
                     modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,

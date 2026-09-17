@@ -1,6 +1,6 @@
 # Architecture Review and Rebuild
 
-Initial review: September 2026, including the then-uncommitted Milestone 4 implementation. Updated September 16 after the shared-player and Lyrics Mode work. See [current status](PROJECT_STATUS.md) for the accepted baseline and remaining request-flow work.
+Initial review: September 2026, including the then-uncommitted Milestone 4 implementation. Presentation notes updated September 16 for the compact branch's direct reading modes. See [current status](PROJECT_STATUS.md) for the accepted baseline and remaining request-flow work, and [compact experiment notes](COMPACT_DROPDOWN_EXPERIMENT.md) for branch-specific UI changes.
 
 ## Findings addressed
 
@@ -35,14 +35,14 @@ The subscription beta uses the documented Codex app-server protocol, not the rem
 ## Shared player presentation
 
 - `MenuBarController` retains one `NSHostingController<MenuBarRootView>`. Detaching transfers that controller to the normal-level `PlayerWindow`; redocking transfers it back to `NSPopover`. Store, request state, playback, and view implementation are shared.
-- `PlayerPresentation` owns selected panel, Advanced View, Lyrics Mode, allocated height, and remembered detached heights. Feature availability does not depend on detachment. Only container-specific behavior branches on `isDetached`.
+- `PlayerPresentation` owns selected panel, Advanced View, miniplayer/detail state, allocated height, and remembered detached reading heights. Lyrics and queue are direct reading modes, not separate normal/focused states. Feature availability does not depend on detachment. Only container-specific behavior branches on `isDetached`.
 - Both surfaces constrain the content viewport to the current native height. The dropdown previously used its desired content height before its asynchronous native resize completed, unlike the detached player. It now publishes and uses the allocated height after native resizing and anchor correction. The owner reports no remaining flutter in the updated build.
 - A stable, invisible anchor panel prevents fullscreen auto-hiding menu bars from moving the popover. Local/global click monitoring handles outside clicks and right-side status icons; clicking VibeCast again closes the dropdown. These monitors do not dismiss the detached player.
-- Width is fixed at 400 points. The detached standard and focused-lyrics views resize vertically; queue and normal lyrics lock height and restore the preceding standard height when closed. The detached minimum is 405 points, capped to available screen space. Dropdown Lyrics Mode retains normal lyrics height and has no drag region.
-- The same sparkles control and reduced-motion-aware ripple transition enter/exit Lyrics Mode in both presentations. Detaching preserves active Lyrics Mode and enables its vertical resizing. Redocking resets only custom sizes and opens the dropdown with Lyrics Mode still active at the normal fixed lyrics height. Size resets never change feature state: panel selection, focus, Advanced View, and drafts remain intact.
-- Synced lyric text uses the same 22-point font in both layouts. Click-to-seek, playback controls, Spotify Connect switching, request composition, and developer diagnostics have one shared implementation. Queue selection still advances sequentially; direct jump research remains deferred by agreement.
+- On the compact branch, width is fixed at 340 points. Detached lyrics and queue modes resize vertically to a minimum of 344 points and remember independent heights until redocking. Dropdown reading modes remain fixed at 544 points, capped to available screen space. Other screens fit content automatically but cannot be manually resized.
+- The ordinary lyrics/queue controls open reading modes directly with the shared reduced-motion-aware ripple; their active buttons return to landing. The former extra sparkles toggle is removed from normal reading screens. Detaching preserves the selected mode and enables resizing. Redocking resets only custom sizes. Miniplayer reading modes remain independent, fixed-size, and retain their own header exit buttons.
+- Synced lyric text uses the same 18-point font throughout the compact layout. Click-to-seek, playback controls, Spotify Connect switching, request composition, and developer diagnostics have one shared implementation. Queue selection still advances sequentially; direct jump research remains deferred by agreement.
 
-Presentation code is concentrated in `App/MenuBarController.swift`, `Models/PlayerPresentation.swift`, and `Views/MenuBarRootView.swift`. `Views/LyricsModeTransition.swift` owns the ripple; `Views/PlayerDetailsView.swift` and `Views/SyncedLyricsView.swift` own the shared reading content. Native presentation and visual tests cover both containers.
+Presentation code is concentrated in `App/MenuBarController.swift`, `Models/PlayerPresentation.swift`, and `Views/MenuBarRootView.swift`. `Views/PlayerRippleTransition.swift` owns the ripple; `Views/ReadingPlayerView.swift` owns the normal reading scaffold, while `Views/PlayerDetailsView.swift` and `Views/SyncedLyricsView.swift` own the content shared with miniplayer. Native presentation and visual tests cover both containers.
 
 ## Remaining request work
 

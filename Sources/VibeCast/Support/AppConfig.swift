@@ -54,6 +54,7 @@ final class AppSettings: ObservableObject {
         aiConsent = defaults.bool(forKey: "aiConsent")
         notificationsEnabled = defaults.object(forKey: "notificationsEnabled") as? Bool ?? true
         lyricsEnabled = defaults.bool(forKey: "lyricsEnabled")
+        defaults.removeObject(forKey: "miniplayerStyle")
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-4.1-mini"
     }
 

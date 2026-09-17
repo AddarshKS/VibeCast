@@ -4,6 +4,18 @@ import Testing
 
 @MainActor
 struct SettingsDraftTests {
+    @Test func retiredMiniplayerPreferenceIsRemovedWithoutChangingOtherSettings() async throws {
+        let (store, _, _, _, defaults) = try await StoreTests().fixture()
+        let original = SettingsDraft(settings: store.settings)
+        for legacy in ["standard", "immersiveDark", "immersiveLight", "unknown-style"] {
+            defaults.set(legacy, forKey: "miniplayerStyle")
+            let restored = AppSettings(defaults: defaults)
+            #expect(defaults.object(forKey: "miniplayerStyle") == nil)
+            #expect(SettingsDraft(settings: restored) == original)
+            #expect(!original.hasChanges(from: restored, apiKey: ""))
+        }
+    }
+
     @Test func everyPreferenceIsTrackedAndRevertingClearsDirtyState() {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let original = SettingsDraft(settings: settings)

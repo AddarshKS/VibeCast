@@ -1,10 +1,12 @@
 import SwiftUI
 
 struct SyncedLyricsView: View {
+    @Environment(\.playerDensity) private var density
     @ObservedObject var store: VibeCastStore
     let lyrics: TimedLyrics
     let trackURI: String?
     var height: CGFloat = 250
+    var overArtwork = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var follow = true
 
@@ -15,19 +17,14 @@ struct SyncedLyricsView: View {
             let active = fresh ? lyrics.activeLine(at: position) : nil
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: density.value(18, 14)) {
                         ForEach(lyrics.lines) { line in
                             Button {
                                 guard let trackURI else { return }
                                 follow = true
                                 store.control(.seek(positionMS: line.timeMS, trackURI: trackURI))
                             } label: {
-                                Text(line.text.isEmpty ? "\u{00B7} \u{00B7} \u{00B7}" : line.text)
-                                .font(.system(size: 22, weight: .semibold, design: .rounded))
-                                .foregroundStyle(line.id == active ? Color.primary : Color.secondary.opacity(0.6))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
+                                LyricLineLabel(text: line.text, active: line.id == active, overArtwork: overArtwork)
                             }
                                 .buttonStyle(.plain)
                                 .disabled(store.isBusy || !fresh || !canSeek(line))
@@ -57,6 +54,7 @@ struct SyncedLyricsView: View {
                         follow.toggle()
                         if follow { scroll(proxy, to: active) }
                     }
+                    .padding(.bottom, 10).padding(.trailing, 2)
                 }
                 .onChange(of: active, initial: true) { old, value in
                     if follow && fresh { scroll(proxy, to: value, animated: old != nil) }
@@ -83,6 +81,29 @@ struct SyncedLyricsView: View {
               let duration = store.playback?.item?.durationMS else { return false }
         return !line.text.isEmpty && line.timeMS >= 0 && line.timeMS < duration &&
             store.playback?.actions?.disallows?["seeking"] != true && store.playback?.device?.isRestricted != true
+    }
+
+}
+
+struct LyricLineLabel: View {
+    @Environment(\.playerDensity) private var density
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+    let text: String
+    let active: Bool
+    var overArtwork = false
+
+    var body: some View {
+        Text(text.isEmpty ? "\u{00B7} \u{00B7} \u{00B7}" : text)
+            .font(.system(size: density.lyricsFont, weight: .semibold, design: .rounded))
+            .foregroundStyle(active ? Color.primary : (overArtwork ? .white.opacity(0.4) : .secondary.opacity(0.6)))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Draw within the same row bounds so emphasis never changes wrapping or scroll anchors.
+            .scaleEffect(active ? 1 : 0.97, anchor: .leading)
+            .shadow(color: .white.opacity(active && scheme == .dark ? 0.16 : 0), radius: 2)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: active)
+            .contentShape(Rectangle())
     }
 }
 

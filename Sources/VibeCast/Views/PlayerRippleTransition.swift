@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct WandPositions: PreferenceKey {
+struct RippleOrigins: PreferenceKey {
     static let defaultValue: [String: CGPoint] = [:]
     static func reduce(value: inout [String: CGPoint], nextValue: () -> [String: CGPoint]) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
@@ -8,11 +8,11 @@ struct WandPositions: PreferenceKey {
 }
 
 extension View {
-    func measureWandPosition(_ name: String) -> some View {
+    func measureRippleOrigin(_ name: String) -> some View {
         background {
             GeometryReader { geometry in
                 let frame = geometry.frame(in: .named("player"))
-                Color.clear.preference(key: WandPositions.self, value: [name: CGPoint(x: frame.midX, y: frame.midY)])
+                Color.clear.preference(key: RippleOrigins.self, value: [name: CGPoint(x: frame.midX, y: frame.midY)])
             }
         }
     }
@@ -38,24 +38,24 @@ private struct RippleMask: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        content.mask {
-            GeometryReader { geometry in
-                let radius = hypot(max(origin.x, geometry.size.width - origin.x),
-                                   max(origin.y, geometry.size.height - origin.y)) + 2
-                // Complementary masks reveal the new layout from the button in
-                // either direction, regardless of which layout is above the other.
-                RippleShape(origin: origin, radius: radius * min(1, max(0, progress)), erasing: erasing)
-                    .fill(style: FillStyle(eoFill: true))
-            }
-        }
+        // Keep the live screen's identity through both endpoints. Switching between
+        // masked and unmasked content recreates artwork, scroll views and controls.
+        content.clipShape(RippleShape(progress: progress, origin: origin, erasing: erasing),
+                          style: FillStyle(eoFill: true))
     }
 }
 
-private struct RippleShape: Shape {
+struct RippleShape: Shape {
+    var progress: CGFloat
     let origin: CGPoint
-    let radius: CGFloat
     let erasing: Bool
     func path(in rect: CGRect) -> Path {
+        // Derive clipping from the current bounds, including after a completed
+        // transition is resized. No offscreen mask retains the original height.
+        if erasing ? progress <= 0 : progress >= 1 { return Path(rect) }
+        if erasing ? progress >= 1 : progress <= 0 { return Path() }
+        let radius = (hypot(max(abs(origin.x - rect.minX), abs(rect.maxX - origin.x)),
+                            max(abs(origin.y - rect.minY), abs(rect.maxY - origin.y))) + 2) * progress
         var path = Path()
         if erasing { path.addRect(rect) }
         path.addEllipse(in: CGRect(x: origin.x - radius, y: origin.y - radius, width: radius * 2, height: radius * 2))

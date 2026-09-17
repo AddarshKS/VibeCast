@@ -11,7 +11,7 @@ enum PlaybackConfirmation {
         case .seek(let position, let uri):
             guard after.item?.uri == uri, let progress = after.progressMS else { return false }
             return abs(Double(progress) - Double(position)) <= 3000
-        case .advanceQueue(let uri, let id):
+        case .advanceQueue(let uri, let id), .rewindQueue(let uri, let id):
             return after.isPlaying && after.item?.uri == uri && before?.item?.uri != uri && after.device?.id == id
         case .playResolvedTrack(let track): return after.isPlaying && after.item?.uri == track.uri
         case .next, .previous:

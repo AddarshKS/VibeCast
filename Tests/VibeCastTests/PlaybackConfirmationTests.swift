@@ -4,6 +4,41 @@ import Testing
 
 @MainActor
 struct PlaybackConfirmationTests {
+    @Test func historyUsesSharedConfirmedSteppingWithoutReplacingTheQueue() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        let tracks = (0...3).map { SpotifyTrack(uri: "spotify:track:t\($0)", name: "Song \($0)", artists: [], album: nil, isPlayable: true) }
+        for track in tracks {
+            api.playbackValue = SpotifyPlayback(isPlaying: true, item: track,
+                device: SpotifyDevice(id: "mac", name: "Mac", isActive: true, isRestricted: false),
+                shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+        }
+        api.previousItems = Array(tracks.dropLast())
+        store.playListItem(at: 1, in: store.playerDetails.recentlyPlayed.map(\.queueItem), list: .history)
+        await store.waitUntilIdle()
+        #expect(api.actions == [.rewindQueue(trackURI: tracks[2].uri, deviceID: "mac"), .rewindQueue(trackURI: tracks[1].uri, deviceID: "mac")])
+        #expect(store.playback?.item?.uri == tracks[1].uri)
+        #expect(store.pendingHistoryIndex == nil)
+        #expect(store.latestError == nil)
+    }
+
+    @Test func mismatchedSpotifyHistoryStopsAfterOneStep() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        for index in 0...2 {
+            api.playbackValue = SpotifyPlayback(isPlaying: true,
+                item: SpotifyTrack(uri: "spotify:track:t\(index)", name: "Song", artists: [], album: nil, isPlayable: true),
+                device: SpotifyDevice(id: "mac", name: "Mac", isActive: true, isRestricted: false),
+                shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+        }
+        api.previousItems = [PlayerTests.track]
+        store.playListItem(at: 0, in: store.playerDetails.recentlyPlayed.map(\.queueItem), list: .history)
+        await store.waitUntilIdle()
+        #expect(api.actions.count == 1)
+        #expect(store.latestError != nil)
+        #expect(store.pendingHistoryIndex == nil)
+    }
+
     private func state(shuffle: Bool = false, uri: String = "spotify:track:old", progress: Int = 12000) -> SpotifyPlayback {
         SpotifyPlayback(isPlaying: true,
                         item: SpotifyTrack(uri: uri, name: "Song", artists: [], album: nil, isPlayable: true),
