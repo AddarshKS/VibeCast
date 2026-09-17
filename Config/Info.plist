@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>VibeCast</string>
+    <key>CFBundleIdentifier</key><string>app.vibecast.mac</string>
+    <key>CFBundleName</key><string>VibeCast</string>
+    <key>CFBundleDisplayName</key><string>VibeCast</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleIconFile</key><string>VibeCast</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSUIElement</key><true/>
+    <key>LSMultipleInstancesProhibited</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHumanReadableCopyright</key><string>VibeCast</string>
+    <key>VibeCastSpotifyClientID</key><string></string>
+    <key>VibeCastServiceURL</key><string></string>
+    <key>VibeCastAIProvider</key><string>chatGPT</string>
+</dict>
+</plist>

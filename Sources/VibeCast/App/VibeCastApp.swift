@@ -1,21 +1,11 @@
-import SwiftUI
+import AppKit
 
 @main
-struct VibeCastApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = VibeCastStore()
-
-    var body: some Scene {
-        MenuBarExtra {
-            MenuBarRootView(store: store)
-                .frame(width: 380)
-        } label: {
-            MenuBarIconView()
-        }
-        .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView(store: store)
-        }
+struct VibeCastApp {
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        withExtendedLifetime(delegate) { app.run() }
     }
 }

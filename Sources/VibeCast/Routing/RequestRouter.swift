@@ -1,65 +1,37 @@
 import Foundation
 
 struct RequestRouter {
-    private let directClassifier = DirectCommandClassifier()
-
     func route(_ request: VibeCastRequest) -> RequestRoute {
-        let prompt = request.prompt
-        let normalized = prompt.lowercased()
-
-        if let action = directClassifier.action(for: prompt) {
-            return .directSpotify(action)
+        let original = request.prompt
+        let p = original.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let action = DirectCommandClassifier().action(for: p) { return .directSpotify(action) }
+        if p.matches(#"\b(make|create|build|curate)\b.*\b(playlist|songs|music|tracks|mix)\b"#) || p.contains("cast magic") {
+            return .makePlaylist(prompt: original)
         }
-
-        if looksLikeCasualChat(normalized) {
-            return .codexChat(prompt: prompt)
+        if p.contains("what should i play") || p.contains("what do you think") || p.contains("how are you") {
+            return .conversation(prompt: original)
         }
-
-        if looksBroadOrMoodBased(normalized) {
-            return .codexComputerFallback(prompt: prompt)
+        let musicCommand = p.matches(#"\b(play|find|put on|listen to|start)\b"#)
+        if !musicCommand && p.matches(#"\b(tired|stressed|damn|feeling)\b"#) {
+            return .conversation(prompt: original)
         }
-
-        if normalized.hasPrefix("play ") || normalized.hasPrefix("queue ") {
-            return .codexInterpreter(prompt: prompt)
+        if p.matches(#"^(queue|add to queue)\s+"#) { return .track(prompt: original) }
+        if p.matches(#"^(play|start|put on|listen to)\s+["\u{201C}]"#) { return .track(prompt: original) }
+        if p.matches(#"\b(playlist|songs|music|tracks|edm|jazz|lofi|lo-fi|chill|workout|focus|coding|party|vibe|vibing)\b"#)
+            || p.contains("road trip") || p.contains("late night") || p.contains("late-night")
+            || p.hasPrefix("find me ") || p.hasPrefix("play some ") {
+            return .findPlaylist(prompt: original)
         }
-
-        return .codexChat(prompt: prompt)
+        if p.matches(#"^(play|start|put on|listen to)\s+"#) { return .track(prompt: original) }
+        return .conversation(prompt: original)
     }
+}
 
-    private func looksLikeCasualChat(_ prompt: String) -> Bool {
-        let chatMarkers = [
-            "i am tired",
-            "i'm tired",
-            "im tired",
-            "damn",
-            "how are you",
-            "what do you think",
-            "i feel",
-            "i'm feeling",
-            "im feeling"
-        ]
-
-        return chatMarkers.contains { prompt.contains($0) }
-    }
-
-    private func looksBroadOrMoodBased(_ prompt: String) -> Bool {
-        let fallbackMarkers = [
-            "some ",
-            "playlist",
-            "vibe",
-            "vibing",
-            "mood",
-            "road trip",
-            "late-night",
-            "late night",
-            "coding",
-            "edm",
-            "party",
-            "workout",
-            "focus",
-            "white girl music"
-        ]
-
-        return fallbackMarkers.contains { prompt.contains($0) }
+extension String {
+    func matches(_ pattern: String) -> Bool { range(of: pattern, options: .regularExpression) != nil }
+    var musicNormalized: String {
+        folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased().replacingOccurrences(of: #"[^\p{L}\p{N}]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

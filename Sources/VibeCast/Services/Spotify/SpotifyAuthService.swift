@@ -1,216 +1,174 @@
 import CryptoKit
 import Foundation
 
-enum SpotifyAuthError: LocalizedError {
-    case invalidAuthorizeURL
-    case invalidCallback
-    case stateMismatch
-    case missingCodeVerifier
-    case missingRefreshToken
-    case spotifyDenied(String)
-    case tokenExchangeFailed(String)
-    case keychain(OSStatus)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidAuthorizeURL:
-            "Could not build Spotify login URL."
-        case .invalidCallback:
-            "Spotify login callback was invalid."
-        case .stateMismatch:
-            "Spotify login state did not match. Please try logging in again."
-        case .missingCodeVerifier:
-            "Spotify login state expired. Please try logging in again."
-        case .missingRefreshToken:
-            "Spotify refresh token is missing. Please log in again."
-        case .spotifyDenied(let message):
-            "Spotify login was denied: \(message)"
-        case .tokenExchangeFailed(let message):
-            "Spotify token exchange failed: \(message)"
-        case .keychain(let status):
-            "Keychain error: \(status)"
-        }
-    }
+@MainActor
+protocol SpotifyAuthorizing: AnyObject {
+    func validAccessToken(forceRefresh: Bool) async throws -> String
+    func currentToken() throws -> SpotifyToken?
 }
 
 @MainActor
-final class SpotifyAuthService {
-    static let shared = SpotifyAuthService()
-
-    private let tokenStore = SpotifyTokenStore()
-    private let defaults: UserDefaults
-    private let verifierKey = "vibecast.spotify.pkce.verifier"
-    private let stateKey = "vibecast.spotify.pkce.state"
+final class SpotifyAuthService: SpotifyAuthorizing {
+    private let settings: AppSettings
+    private let secrets: any SecretStoring
+    private let transport: any HTTPTransport
+    private let loginReceiver = LoopbackLogin()
     private var cachedToken: SpotifyToken?
+    private var refreshTask: Task<String, Error>?
+    private var generation = UUID()
+    private var account: String { "spotify.\(settings.spotifyClientID).\(settings.serviceAddress)" }
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(settings: AppSettings, secrets: any SecretStoring, transport: any HTTPTransport = URLSessionTransport()) {
+        self.settings = settings
+        self.secrets = secrets
+        self.transport = transport
     }
 
     func currentToken() throws -> SpotifyToken? {
-        if let cachedToken {
-            return cachedToken
-        }
-
-        let token = try tokenStore.load()
+        if let cachedToken { return cachedToken }
+        guard let data = try secrets.read(account: account) else { return nil }
+        let token = try JSONDecoder().decode(SpotifyToken.self, from: data)
         cachedToken = token
         return token
     }
 
-    func authorizationURL() throws -> URL {
-        let verifier = Self.randomCodeVerifier()
+    func login() async throws {
+        guard settings.hasSpotifyConfiguration else {
+            throw UserFacingError("Spotify isn't configured for this build. Open Settings to finish setup.")
+        }
+        let nonce = generation
+        let verifier = UUID().uuidString + UUID().uuidString
         let state = UUID().uuidString
-        defaults.set(verifier, forKey: verifierKey)
-        defaults.set(state, forKey: stateKey)
-
-        var components = URLComponents(string: "https://accounts.spotify.com/authorize")
-        components?.queryItems = [
-            URLQueryItem(name: "client_id", value: AppConfig.spotifyClientID),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "redirect_uri", value: AppConfig.spotifyRedirectURI),
-            URLQueryItem(name: "scope", value: AppConfig.spotifyScopes.joined(separator: " ")),
-            URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "code_challenge", value: Self.codeChallenge(for: verifier))
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        var components = URLComponents(string: "https://accounts.spotify.com/authorize")!
+        components.queryItems = [
+            .init(name: "client_id", value: settings.spotifyClientID),
+            .init(name: "response_type", value: "code"),
+            .init(name: "redirect_uri", value: AppConfig.spotifyRedirectURI),
+            .init(name: "scope", value: AppConfig.spotifyScopes.joined(separator: " ")),
+            .init(name: "state", value: state),
+            .init(name: "code_challenge_method", value: "S256"),
+            .init(name: "code_challenge", value: challenge),
+            .init(name: "show_dialog", value: "true")
         ]
-
-        guard let authURL = components?.url else {
-            throw SpotifyAuthError.invalidAuthorizeURL
-        }
-
-        return authURL
+        let url = try await loginReceiver.receiveCallback(open: components.url!, state: state)
+        let code = try Self.authorizationCode(url: url, expectedState: state)
+        let response = try await tokenRequest([
+            "grant_type": "authorization_code", "code": code,
+            "code_verifier": verifier, "redirect_uri": AppConfig.spotifyRedirectURI
+        ])
+        try Task.checkCancellation()
+        guard generation == nonce else { throw CancellationError() }
+        try save(response.token())
     }
 
-    func handleRedirectURL(_ url: URL) async throws {
-        guard
-            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-            components.scheme == AppConfig.spotifyCallbackScheme,
-            components.host == "spotify-auth-callback"
-        else {
-            throw SpotifyAuthError.invalidCallback
+    static func authorizationCode(url: URL, expectedState: String) throws -> String {
+        guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              c.scheme == "http", c.host == "127.0.0.1", c.port == 43821, c.path == "/callback" else {
+            throw UserFacingError("That Spotify sign-in link isn't valid.")
         }
-
-        let items = components.queryItems ?? []
-        if let error = items.first(where: { $0.name == "error" })?.value {
-            throw SpotifyAuthError.spotifyDenied(error)
+        let items = c.queryItems ?? []
+        guard items.filter({ $0.name == "state" }).count == 1,
+              items.first(where: { $0.name == "state" })?.value == expectedState else {
+            throw UserFacingError("Spotify sign-in expired. Please try again.")
         }
-
-        guard let code = items.first(where: { $0.name == "code" })?.value else {
-            throw SpotifyAuthError.invalidCallback
+        if items.contains(where: { $0.name == "error" }) {
+            throw UserFacingError("Spotify access wasn't granted. You can reconnect whenever you're ready.")
         }
-
-        guard
-            let returnedState = items.first(where: { $0.name == "state" })?.value,
-            let expectedState = defaults.string(forKey: stateKey),
-            returnedState == expectedState
-        else {
-            throw SpotifyAuthError.stateMismatch
+        let codes = items.filter { $0.name == "code" }
+        guard codes.count == 1, let code = codes.first?.value, !code.isEmpty else {
+            throw UserFacingError("Spotify didn't return a sign-in code. Please try again.")
         }
-
-        guard let verifier = defaults.string(forKey: verifierKey) else {
-            throw SpotifyAuthError.missingCodeVerifier
-        }
-
-        let token = try await exchangeCode(code, verifier: verifier)
-        try tokenStore.save(token)
-        cachedToken = token
-        defaults.removeObject(forKey: verifierKey)
-        defaults.removeObject(forKey: stateKey)
+        return code
     }
 
-    func validAccessToken() async throws -> String {
-        guard let token = try currentToken() else {
-            throw SpotifyAuthError.missingRefreshToken
+    func validAccessToken(forceRefresh: Bool = false) async throws -> String {
+        if let refreshTask { return try await refreshTask.value }
+        guard let token = try currentToken() else { throw UserFacingError("Connect Spotify to continue.") }
+        if !forceRefresh && !token.isExpired { return token.accessToken }
+        guard let refreshToken = token.refreshToken else {
+            throw UserFacingError("Your Spotify session expired. Reconnect in Settings.")
         }
-
-        if !token.isExpired {
-            return token.accessToken
+        let nonce = generation
+        let task = Task { @MainActor in
+            let response = try await self.tokenRequest(["grant_type": "refresh_token", "refresh_token": refreshToken])
+            try Task.checkCancellation()
+            guard self.generation == nonce else { throw CancellationError() }
+            let refreshed = response.token(replacingRefreshToken: refreshToken, replacingScope: token.scope)
+            try self.save(refreshed)
+            return refreshed.accessToken
         }
+        refreshTask = task
+        defer { if generation == nonce { refreshTask = nil } }
+        return try await task.value
+    }
 
-        let refreshed = try await refresh(token)
-        try tokenStore.save(refreshed)
-        cachedToken = refreshed
-        return refreshed.accessToken
+    func serviceSession() async throws -> String {
+        _ = try await validAccessToken()
+        guard let session = try currentToken()?.serviceSession else {
+            throw UserFacingError("Reconnect Spotify to activate Cast Magic on this service.")
+        }
+        return session
     }
 
     func logout() throws {
-        defaults.removeObject(forKey: verifierKey)
-        defaults.removeObject(forKey: stateKey)
+        generation = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        loginReceiver.cancel()
+        let token = cachedToken
+        try secrets.remove(account: account)
         cachedToken = nil
-        try tokenStore.clear()
-    }
-
-    private func exchangeCode(_ code: String, verifier: String) async throws -> SpotifyToken {
-        let body = [
-            "client_id": AppConfig.spotifyClientID,
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": AppConfig.spotifyRedirectURI,
-            "code_verifier": verifier
-        ]
-
-        let response: SpotifyTokenResponse = try await Self.postToken(body: body)
-        return response.token()
-    }
-
-    private func refresh(_ token: SpotifyToken) async throws -> SpotifyToken {
-        guard let refreshToken = token.refreshToken else {
-            throw SpotifyAuthError.missingRefreshToken
+        if let session = token?.serviceSession, let base = settings.serviceURL {
+            let transport = transport
+            Task {
+                var request = URLRequest(url: base.appendingPathComponent("v1/logout"))
+                request.httpMethod = "POST"
+                request.setValue("Bearer \(session)", forHTTPHeaderField: "Authorization")
+                _ = try? await transport.data(for: request)
+            }
         }
-
-        let body = [
-            "client_id": AppConfig.spotifyClientID,
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken
-        ]
-
-        let response: SpotifyTokenResponse = try await Self.postToken(body: body)
-        return response.token(replacingRefreshToken: refreshToken)
     }
 
-    private static func postToken<T: Decodable>(body: [String: String]) async throws -> T {
-        var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
+    private func save(_ token: SpotifyToken) throws {
+        try secrets.write(JSONEncoder().encode(token), account: account)
+        cachedToken = token
+    }
+
+    private func tokenRequest(_ fields: [String: String]) async throws -> SpotifyTokenResponse {
+        var fields = fields
+        fields["client_id"] = settings.spotifyClientID
+        let useGateway = !settings.serviceAddress.isEmpty
+        if useGateway && settings.serviceURL == nil {
+            throw UserFacingError("The VibeCast service address must be a valid HTTPS address.")
+        }
+        let url = useGateway ? settings.serviceURL!.appendingPathComponent("v1/token")
+            : URL(string: "https://accounts.spotify.com/api/token")!
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body
-            .map { "\($0.key)=\($0.value.urlFormEncoded)" }
-            .joined(separator: "&")
-            .data(using: .utf8)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "Unknown token error"
-            throw SpotifyAuthError.tokenExchangeFailed(message)
+        if useGateway {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(fields)
+        } else {
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            var allowed = CharacterSet.alphanumerics
+            allowed.insert(charactersIn: "-._~")
+            request.httpBody = Data(fields.sorted(by: { $0.key < $1.key }).map {
+                "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
+            }.joined(separator: "&").utf8)
         }
-
-        return try JSONDecoder().decode(T.self, from: data)
-    }
-
-    private static func randomCodeVerifier() -> String {
-        let allowed = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-        return String((0..<64).compactMap { _ in allowed.randomElement() })
-    }
-
-    private static func codeChallenge(for verifier: String) -> String {
-        let data = Data(verifier.utf8)
-        let digest = SHA256.hash(data: data)
-        return Data(digest).base64URLEncodedString()
-    }
-}
-
-private extension Data {
-    func base64URLEncodedString() -> String {
-        base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-}
-
-private extension String {
-    var urlFormEncoded: String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        return addingPercentEncoding(withAllowedCharacters: allowed) ?? self
+        let (data, response) = try await transport.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            if response.statusCode == 400 || response.statusCode == 401 {
+                throw UserFacingError("Spotify sign-in expired or the app configuration changed. Reconnect Spotify.")
+            }
+            if response.statusCode == 403 {
+                throw UserFacingError("This Spotify account doesn't have access to this VibeCast beta. Ask the publisher to add you as a tester.")
+            }
+            throw UserFacingError("Spotify sign-in couldn't finish (\(response.statusCode)). Try again shortly.")
+        }
+        return try JSONDecoder().decode(SpotifyTokenResponse.self, from: data)
     }
 }

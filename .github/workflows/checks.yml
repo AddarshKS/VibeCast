@@ -1,0 +1,36 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build and test
+        run: |
+          ./script/swift.sh build
+          ./script/swift.sh test
+      - name: Package development app
+        run: |
+          ./script/package_app.sh debug
+          ditto -c -k --keepParent dist/VibeCast.app dist/VibeCast-development.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VibeCast-development
+          path: dist/VibeCast-development.zip
+  service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test service
+        working-directory: server
+        run: npm test

@@ -55,11 +55,17 @@ struct DirectCommandClassifier {
         if let range = remainder.range(of: " by ") {
             let title = String(remainder[..<range.lowerBound]).trimmedTitle
             let artist = String(remainder[range.upperBound...]).trimmedTitle
+            guard !Self.isGenericArtistPlaylistRequest(title) else { return nil }
             guard !title.isEmpty, !artist.isEmpty else { return nil }
             return TrackQuery(title: title, artist: artist)
         }
 
         return nil
+    }
+
+    private static func isGenericArtistPlaylistRequest(_ title: String) -> Bool {
+        let normalized = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.range(of: #"^(some |me some |me |a few )?(song|songs|music|tracks|playlist)$"#, options: .regularExpression) != nil
     }
 
     private func parseDeviceCommand(_ normalized: String) -> String? {

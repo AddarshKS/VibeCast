@@ -2,57 +2,35 @@ import SwiftUI
 
 struct DiagnosticsView: View {
     @ObservedObject var store: VibeCastStore
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if store.lastRouteName != nil || store.lastSpotifyAction != nil || store.lastResolvedItem != nil {
-                VStack(alignment: .leading, spacing: 4) {
-                    diagnosticRow("Route", store.lastRouteName)
-                    diagnosticRow("Spotify action", store.lastSpotifyAction)
-                    diagnosticRow("Resolved", store.lastResolvedItem)
+        VStack(alignment: .leading, spacing: 12) {
+            LabeledContent("Version", value: AppConfig.version)
+            LabeledContent("Route", value: store.lastRouteName ?? "Ready")
+            LabeledContent("Spotify action", value: store.lastSpotifyAction ?? "-")
+            LabeledContent("State", value: store.isBusy ? store.progress : (store.latestError == nil ? "Ready" : "Failed"))
+            if let resolved = store.lastResolvedItem {
+                LabeledContent("Resolved", value: resolved)
+            }
+            if let recommendation = store.pendingPlaylistRecommendation {
+                LabeledContent("Search", value: recommendation.searchPhrase)
+                LabeledContent("Pending", value: recommendation.playlist.name)
+                LabeledContent("Original prompt", value: recommendation.originalPrompt)
+            }
+            Text("RECENT REQUESTS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+            if store.requestHistory.isEmpty { Text("No requests yet.").foregroundStyle(.secondary) }
+            ForEach(store.requestHistory) { item in
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(item.message, systemImage: item.status == .success ? "checkmark" : "exclamationmark.circle")
+                        .foregroundStyle(item.status == .success ? Color.primary : Color.orange)
+                    Text("\(item.routeName) - \(item.prompt)").foregroundStyle(.secondary)
+                    Text(item.createdAt.formatted(date: .omitted, time: .standard)).foregroundStyle(.tertiary)
                 }
             }
-
-            if !store.requestHistory.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Recent")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    ForEach(store.requestHistory) { item in
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Image(systemName: item.status == .success ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                                .foregroundStyle(item.status == .success ? .green : .red)
-                                .frame(width: 14)
-
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(item.message)
-                                    .lineLimit(1)
-                                Text("\(item.routeName) - \(item.prompt)")
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-                }
+            if !store.isBusy {
+                Button("Clear current result") { store.clear() }.buttonStyle(.borderless)
             }
         }
-        .font(.caption)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func diagnosticRow(_ label: String, _ value: String?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .frame(width: 84, alignment: .leading)
-
-            Text(value ?? "-")
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
+        .font(.system(size: 11))
+        .textSelection(.enabled)
     }
 }

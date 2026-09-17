@@ -3,3 +3,17 @@ dist/
 .DS_Store
 DerivedData/
 *.xcuserdata/
+Config/Local.plist
+Config/Release.plist
+server/.env
+server/.env.*
+!server/.env.example
+server/data/
+node_modules/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.p12
+*.p8
+dist-stage.*/
+.artifacts/
