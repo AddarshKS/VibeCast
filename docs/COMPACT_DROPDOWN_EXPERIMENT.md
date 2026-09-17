@@ -47,4 +47,4 @@ With the local playback fixture, landing is restored to 340 x 418 points, includ
 
 ## Returning To The Baseline
 
-Keep or stash uncommitted edits before switching branches. Switching back to `codex/public-beta` and rebuilding/installing restores the previous, pre-compact design. Merely changing branches does not replace an already installed app. The compact UI is now the accepted checkpoint; returning to the earlier design should be an explicit decision, not part of routine request work.
+Keep or stash uncommitted edits before switching branches. The pre-compact baseline is the recorded `97e9723` commit, not the moving `codex/public-beta` branch: PR #2 has since merged into that branch. Merely changing branches does not replace an already installed app. The compact UI is now the accepted checkpoint; returning to the earlier design should be an explicit decision, not part of routine request work.

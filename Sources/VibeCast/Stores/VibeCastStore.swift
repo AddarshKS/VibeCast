@@ -23,6 +23,9 @@ final class VibeCastStore: ObservableObject {
     private var accountGeneration = UUID()
     private var playbackRefreshID = UUID()
     private let controlConfirmationDelay: Duration
+    private let accountRetryDelay: TimeInterval
+    private var accountRestoreID: UUID?
+    private var accountRetry: (after: Date, message: String)?
     private var lastSubmittedPrompt: String?
     private(set) var lastInteractionAt = Date()
 
@@ -55,8 +58,10 @@ final class VibeCastStore: ObservableObject {
          spotify: (any SpotifyServing)? = nil, planner: (any PlaylistPlanning)? = nil,
          notifications: (any Notifying)? = nil, defaults: UserDefaults = .standard,
          startAutomatically: Bool = true, chatGPT: ChatGPTSession? = nil,
-         controlConfirmationDelay: Duration = .milliseconds(500), lyrics: any LyricsServing = LyricsClient()) {
+         controlConfirmationDelay: Duration = .milliseconds(500), lyrics: any LyricsServing = LyricsClient(),
+         accountRetryDelay: TimeInterval = 30) {
         self.controlConfirmationDelay = controlConfirmationDelay
+        self.accountRetryDelay = accountRetryDelay
         let settings = settings ?? AppSettings(defaults: defaults)
         let secrets = secrets ?? KeychainStore()
         let auth = SpotifyAuthService(settings: settings, secrets: secrets)
@@ -92,14 +97,20 @@ final class VibeCastStore: ObservableObject {
     }
 
     func refreshAuthState() async {
+        guard accountRestoreID == nil else { return }
+        let restoreID = UUID()
+        accountRestoreID = restoreID
+        defer { if accountRestoreID == restoreID { accountRestoreID = nil } }
         let generation = accountGeneration
         do {
-            guard try auth.currentToken() != nil else { authState = .loggedOut; return }
+            guard try auth.currentToken() != nil else { accountRetry = nil; authState = .loggedOut; return }
             let profile = try await spotify.profile()
             try Task.checkCancellation()
             guard accountGeneration == generation else { return }
             accountID = profile.id
             authState = .loggedIn(displayName: profile.displayName)
+            if latestError == accountRetry?.message { latestError = nil }
+            accountRetry = nil
             pending = pending.filter { $0.isActionable(accountID: profile.id) }
             recommendations.save(pending)
             pendingPlaylistRecommendation = pending.last
@@ -111,16 +122,36 @@ final class VibeCastStore: ObservableObject {
             await refreshPlayback()
         } catch is CancellationError { return }
         catch {
-            guard accountGeneration == generation else { return }
+            guard !Task.isCancelled, (error as? URLError)?.code != .cancelled,
+                  accountGeneration == generation else { return }
             authState = .loggedOut
             latestError = error.localizedDescription
+            var retryDelay = accountRetryDelay
+            if let apiError = error as? SpotifyAPIError, case .rateLimited(let seconds) = apiError {
+                retryDelay = max(retryDelay, TimeInterval(seconds ?? 0))
+            }
+            accountRetry = Self.isTransientAccountFailure(error)
+                ? (Date().addingTimeInterval(retryDelay), error.localizedDescription) : nil
             diagnostics.record("Spotify", "Account restore: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    private static func isTransientAccountFailure(_ error: any Error) -> Bool {
+        if let error = error as? URLError { return error.code != .cancelled }
+        guard let error = error as? SpotifyAPIError else { return false }
+        switch error {
+        case .rateLimited: return true
+        case .requestFailed(let status, _): return status >= 500
+        default: return false
         }
     }
 
     func login() {
         guard !isBusy else { return }
         accountGeneration = UUID()
+        startupTask?.cancel()
+        accountRestoreID = nil
+        accountRetry = nil
         authState = .authenticating
         run(prompt: "", route: .conversation(prompt: "")) {
             self.diagnostics.record("Spotify", "Starting browser sign-in")
@@ -136,6 +167,8 @@ final class VibeCastStore: ObservableObject {
 
     func logout() {
         accountGeneration = UUID()
+        accountRestoreID = nil
+        accountRetry = nil
         cancel()
         startupTask?.cancel()
         do {
@@ -239,17 +272,17 @@ final class VibeCastStore: ObservableObject {
 
     func control(_ action: SpotifyAction) {
         guard authState.isLoggedIn, !isBusy else { return }
-        var before = playback
-        if before?.progressMS != nil, before?.item?.durationMS != nil {
-            before?.progressMS = playback?.elapsedMS(observedAt: playbackUpdatedAt, now: Date())
-        }
+        let before = playback
+        let baselineAge = max(0, Date().timeIntervalSince(playbackUpdatedAt))
         playbackRefreshID = UUID()
         pendingPlayerAction = action
         run(prompt: action.diagnosticName, route: .directSpotify(action), showFeedback: false) {
             try Task.checkCancellation()
             self.lastSpotifyAction = action.diagnosticName
-            let result = try await self.spotify.execute(action)
-            try await self.confirmPlayback(action, before: before)
+            self.diagnostics.record("Player", "\(action.diagnosticName); shuffle=\(before?.shuffleState.description ?? "unknown"); previousRestricted=\(before?.actions?.disallows?["skipping_prev"]?.description ?? "unknown")")
+            let commandStartedAt = ContinuousClock.now
+            let result = try await self.spotify.execute(action, deviceID: before?.device?.id)
+            try await self.confirmPlayback(action, before: before, commandStartedAt: commandStartedAt, baselineAge: baselineAge)
             return result
         }
     }
@@ -306,8 +339,9 @@ final class VibeCastStore: ObservableObject {
                         : .rewindQueue(trackURI: requested[step].uri, deviceID: deviceID)
                     self.pendingPlayerAction = action
                     self.lastSpotifyAction = "Queue step \(step + 1) of \(requested.count)"
+                    let commandStartedAt = ContinuousClock.now
                     _ = try await self.spotify.execute(action)
-                    try await self.confirmPlayback(action, before: current)
+                    try await self.confirmPlayback(action, before: current, commandStartedAt: commandStartedAt)
                     previousURI = requested[step].uri
                 }
                 await self.playerDetails.refreshQueue()
@@ -320,12 +354,14 @@ final class VibeCastStore: ObservableObject {
         }
     }
 
-    private func confirmPlayback(_ action: SpotifyAction, before: SpotifyPlayback?) async throws {
+    private func confirmPlayback(_ action: SpotifyAction, before: SpotifyPlayback?,
+                                 commandStartedAt: ContinuousClock.Instant, baselineAge: TimeInterval = 0) async throws {
         let generation = accountGeneration
         var latest: SpotifyPlayback?
         for attempt in 0..<6 {
             if attempt > 0 { try await Task.sleep(for: controlConfirmationDelay) }
             try Task.checkCancellation()
+            let readStartedAt = ContinuousClock.now
             do { latest = try await spotify.playback() }
             catch {
                 try Task.checkCancellation()
@@ -333,7 +369,12 @@ final class VibeCastStore: ObservableObject {
             }
             try Task.checkCancellation()
             guard accountGeneration == generation else { throw CancellationError() }
-            if PlaybackConfirmation.matches(action, before: before, after: latest) {
+            let elapsed = commandStartedAt.duration(to: .now).components
+            let beforeRead = commandStartedAt.duration(to: readStartedAt).components
+            if PlaybackConfirmation.matches(action, before: before, after: latest,
+                                            elapsedSinceCommand: Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18,
+                                            baselineAge: baselineAge,
+                                            elapsedBeforeRead: Double(beforeRead.seconds) + Double(beforeRead.attoseconds) / 1e18) {
                 playbackUpdatedAt = Date()
                 playbackRefreshFailed = false
                 playback = latest
@@ -363,6 +404,10 @@ final class VibeCastStore: ObservableObject {
     }
 
     func refreshPlayback() async {
+        if !authState.isLoggedIn, !isBusy, let retry = accountRetry, Date() >= retry.after {
+            await refreshAuthState()
+            return
+        }
         guard authState.isLoggedIn, !isPlayerControl else { return }
         let generation = accountGeneration
         let refreshID = UUID()
@@ -624,6 +669,9 @@ final class VibeCastStore: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        if let apiError = error as? SpotifyAPIError, case .playbackRefused(let path, let reason) = apiError {
+            diagnostics.record("Spotify", "HTTP 403 \(path); reason=\(reason.rawValue)", isError: true)
+        }
         diagnostics.record("Request", error.localizedDescription, isError: true)
         latestResult = nil
         latestError = error.localizedDescription

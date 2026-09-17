@@ -201,4 +201,82 @@ struct PlaybackConfirmationTests {
         #expect(PlaybackConfirmation.matches(.previous, before: state(), after: state(progress: 0)))
         #expect(!PlaybackConfirmation.matches(.next, before: state(), after: nil))
     }
+
+    @Test func previousRecognizesEarlyRestartsWithShuffleOnOrOff() {
+        for shuffle in [false, true] {
+            #expect(PlaybackConfirmation.matches(.previous, before: state(shuffle: shuffle, progress: 2400),
+                                                  after: state(shuffle: shuffle, progress: 150)))
+        }
+    }
+
+    @Test func delayedRestartConfirmationUsesCommandElapsedTime() {
+        #expect(PlaybackConfirmation.matches(.previous, before: state(shuffle: true, progress: 2400),
+                                              after: state(shuffle: true, progress: 2600), elapsedSinceCommand: 3))
+        #expect(!PlaybackConfirmation.matches(.previous, before: state(progress: 2400),
+                                               after: state(progress: 5400), elapsedSinceCommand: 3))
+        #expect(!PlaybackConfirmation.matches(.previous, before: state(progress: 2400),
+                                               after: state(progress: 2400), elapsedSinceCommand: 3))
+        #expect(!PlaybackConfirmation.matches(.previous, before: state(progress: 500),
+                                               after: state(progress: 500), elapsedSinceCommand: 1, baselineAge: 8))
+    }
+
+    @Test func seekAccountsForPlaybackAfterTheWriteWithoutAcceptingAnUnchangedNearbyPosition() {
+        let seek = SpotifyAction.seek(positionMS: 40000, trackURI: "spotify:track:old")
+        #expect(PlaybackConfirmation.matches(seek, before: state(), after: state(progress: 45000), elapsedSinceCommand: 5))
+        #expect(!PlaybackConfirmation.matches(seek, before: state(progress: 38000), after: state(progress: 38000)))
+        var paused = state(progress: 45000)
+        paused = SpotifyPlayback(isPlaying: false, item: paused.item, device: nil, shuffleState: false, repeatState: "off", progressMS: 45000)
+        #expect(!PlaybackConfirmation.matches(seek, before: state(), after: paused, elapsedSinceCommand: 5))
+    }
+
+    @Test func slowPlayerReadsCannotManufactureRestartsOrSeeks() {
+        #expect(!PlaybackConfirmation.matches(.previous, before: state(progress: 2400),
+            after: state(progress: 2700), elapsedSinceCommand: 3, elapsedBeforeRead: 0))
+        let seek = SpotifyAction.seek(positionMS: 40000, trackURI: "spotify:track:old")
+        #expect(!PlaybackConfirmation.matches(seek, before: state(progress: 35000),
+            after: state(progress: 45000), elapsedSinceCommand: 10, elapsedBeforeRead: 9.5))
+        #expect(!PlaybackConfirmation.matches(seek, before: state(progress: 35000),
+            after: state(progress: 40500), elapsedSinceCommand: 10, elapsedBeforeRead: 5))
+        #expect(PlaybackConfirmation.matches(seek, before: state(progress: 10000),
+            after: state(progress: 45000), elapsedSinceCommand: 10, elapsedBeforeRead: 5))
+    }
+
+    @Test func playerControlsTargetTheDisplayedDevice() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: PlayerTests.track,
+            device: SpotifyDevice(id: "mac", name: "Mac", isActive: true, isRestricted: false),
+            shuffleState: false, repeatState: "off", progressMS: 12000)
+        await store.refreshPlayback()
+        store.control(.previous)
+        await store.waitUntilIdle()
+        #expect(api.actionDeviceIDs == ["mac"])
+        #expect(store.latestError == nil)
+    }
+
+    @Test func anotherDeviceCannotConfirmAPlayerCommandButCanConfirmATransfer() {
+        let mac = SpotifyDevice(id: "mac", name: "Mac", isActive: true, isRestricted: false)
+        let phone = SpotifyDevice(id: "phone", name: "Phone", isActive: true, isRestricted: false)
+        let before = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: mac,
+                                     shuffleState: false, repeatState: "off", progressMS: 12000)
+        let after = SpotifyPlayback(isPlaying: true, item: PlayerTests.track, device: phone,
+                                    shuffleState: true, repeatState: "off", progressMS: 0)
+        #expect(!PlaybackConfirmation.matches(.shuffle(true), before: before, after: after))
+        #expect(!PlaybackConfirmation.matches(.previous, before: before, after: after))
+        #expect(PlaybackConfirmation.matches(.transferToDevice(phone), before: before, after: after))
+    }
+
+    @Test func previousRestartWhileShuffledDoesNotReportFailureOrResend() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = state(shuffle: true, progress: 2400)
+        await store.refreshPlayback()
+        api.applyControls = false
+        api.playbackValue = state(shuffle: true, progress: 100)
+        store.control(.previous)
+        await store.waitUntilIdle()
+        #expect(api.actions == [.previous])
+        #expect(store.latestError == nil)
+        #expect(store.playback?.shuffleState == true)
+        #expect(store.playerDetails.recentlyPlayed.isEmpty)
+        #expect(store.pendingPlayerAction == nil)
+    }
 }

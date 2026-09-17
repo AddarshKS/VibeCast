@@ -1,8 +1,24 @@
 # VibeCast Project Status
 
-UI freeze: the owner approved the compact player on `codex/compact-dropdown-experiment`. This checkpoint is stacked on `codex/public-beta` (PR #1). Preserve the approved UI while completing review and request readiness; further UI changes need an explicit request. See [compact player scope and verification](COMPACT_DROPDOWN_EXPERIMENT.md).
+UI freeze: the owner approved the compact player on `codex/compact-dropdown-experiment`, originally stacked on `codex/public-beta` (PR #1). The player-reliability integration carries that UI checkpoint forward without redesigning it. Preserve the approved UI while completing review and request readiness; further UI changes need an explicit request. See [compact player scope and verification](COMPACT_DROPDOWN_EXPERIMENT.md).
 
-Updated September 16, 2026.
+Updated September 17, 2026.
+
+## Post-Freeze Reliability Pass
+
+The owner deferred a future landing-page title treatment and a possible height adjustment to match lyrics/queue windows. Neither is part of this pass; the accepted UI and layout remain unchanged.
+
+Before this integration, GitHub verification found PR #1 merged to `main` before PR #2 merged to `codex/public-beta`. Both PRs were merged, but `main` at `198ca09` did not include the compact UI. The UI checkpoint `b181dcc` matches `codex/public-beta` at `0f8b468` by file tree. This integration from `codex/player-reliability` to `main` combines that complete UI checkpoint with the reliability fixes; once merged, no separate UI reconciliation PR is needed. See [reviewer setup and merge reconciliation](BOT_REVIEW_SETUP.md).
+
+Work on `codex/player-reliability` fixes short/delayed restart confirmation, stale confirmation samples, device-bound transport commands, delayed seek confirmation, a refresh-versus-sign-in race, and recovery from transient account-restore failures. Playback 403s now distinguish known restrictions, missing scopes, and an explicit Premium requirement; unknown failures no longer assert that Premium is missing. Advanced diagnostics record the failed endpoint, safe reason classification, and observed shuffle state without raw server payloads or credentials.
+
+Shuffle already uses Spotify's official shuffle endpoint. The reported Previous failure was a real HTTP 403, not just a confirmation timeout. On September 17, the owner retested the updated installed app and confirmed that Previous now works with Shuffle enabled. The original server refusal reason was not captured, so the successful live test should not be presented as proof of its exact cause or as a guarantee against other Spotify-side restrictions.
+
+Direct queue/history jumping remains deferred after the owner's clarification: do not replace Spotify's playback context to simulate preserving the queue. Reading the upcoming list and starting a new list from the selection is technically different from jumping within Spotify's existing queue. Session-local Recently Played also must not be assumed to match Spotify's backward navigation stack, particularly after rewinding. The existing guarded sequential behavior remains provisional, and this audit does not declare it reliable for every history path. A future agent-based approach requires separate investigation.
+
+Verification for this pass: 170 Swift tests across 19 suites passed with visual rendering enabled; all 17 native presentation tests passed separately; routing checks passed all four cases; the optional service passed all nine tests. New regression cases cover early/delayed restarts, slow responses that must not manufacture a restart or seek, device-bound commands, classified 403 errors without automatic retries, competing sign-in/refresh operations, and cancellation-safe account recovery. No view, presentation, or queue-navigation implementation was changed. The updated development bundle was packaged, installed at `/Applications/VibeCast.app`, and verified running.
+
+Live verification was performed by the owner; automated inspection could read Spotify but could not open VibeCast's menu-bar-only window. If Previous is rejected again, capture the new message and the `HTTP 403 /me/player/previous; reason=...` entry in Adv, then compare the same control in Spotify. The owner approved committing, publishing, and merging this integration after the successful live test. Reviewer installation and live AI request testing remain separate work.
 
 ## Accepted baseline
 

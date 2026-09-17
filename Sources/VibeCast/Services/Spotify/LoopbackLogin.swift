@@ -3,7 +3,13 @@ import Foundation
 import Network
 
 @MainActor
-final class LoopbackLogin {
+protocol SpotifyLoginReceiving {
+    func receiveCallback(open authorizationURL: URL, state: String) async throws -> URL
+    func cancel()
+}
+
+@MainActor
+final class LoopbackLogin: SpotifyLoginReceiving {
     private var listener: NWListener?
     private var ready: CheckedContinuation<Void, Error>?
     private var callback: CheckedContinuation<URL, Error>?
