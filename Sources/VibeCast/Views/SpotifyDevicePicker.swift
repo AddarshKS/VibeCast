@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SpotifyDevicePicker: View {
+    @Environment(\.playerDensity) private var density
     @ObservedObject var store: VibeCastStore
     @ObservedObject var details: PlayerDetailsStore
     var close: () -> Void
@@ -9,7 +10,7 @@ struct SpotifyDevicePicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Spotify devices").font(.system(size: 15, weight: .semibold))
+                Text("Spotify devices").font(.system(size: density.value(15, 13), weight: .semibold))
                 Spacer()
                 PlayerIconButton(title: "Refresh devices", symbol: "arrow.clockwise") { retry += 1 }
                 PlayerIconButton(title: "Close devices", symbol: "xmark", action: close)
@@ -39,7 +40,7 @@ struct SpotifyDevicePicker: View {
                                 Image(systemName: "checkmark").foregroundStyle(.teal)
                             }
                         }
-                        .font(.system(size: 13)).padding(.vertical, 10)
+                        .font(.system(size: 13)).padding(.vertical, density.value(10, 7))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

@@ -3,6 +3,7 @@ import Foundation
 enum SpotifyAPIError: LocalizedError {
     case missingTrack, missingDevice, noAvailableDevices, unauthorized, missingPlaylistScopes
     case refused(path: String, message: String)
+    case playbackRefused(path: String, reason: SpotifyPlaybackRefusal)
     case rateLimited(Int?)
     case requestFailed(Int, String)
 
@@ -15,6 +16,7 @@ enum SpotifyAPIError: LocalizedError {
         case .missingPlaylistScopes: "Reconnect Spotify to allow VibeCast to create private playlists."
         case .refused(let path, let message):
             "Spotify declined \(path.contains("/player") ? "playback" : "this request"). Check your app's tester access and Spotify permissions\(path.contains("/player") ? ", and make sure you have Premium" : "").\(message.isEmpty || message == "Forbidden" ? "" : " " + message)"
+        case .playbackRefused(let path, let reason): reason.message(path: path)
         case .rateLimited(let seconds):
             seconds.map { "Spotify is busy. Try again in \($0) seconds." } ?? "Spotify is busy. Try again in a moment."
         case .requestFailed(let status, _): "Spotify couldn't complete that request (\(status)). Please try again."
@@ -35,7 +37,7 @@ struct PlaylistDraft: Codable, Equatable {
 
 @MainActor
 protocol SpotifyServing {
-    func execute(_ action: SpotifyAction) async throws -> VibeCastResult
+    func execute(_ action: SpotifyAction, deviceID: String?) async throws -> VibeCastResult
     func profile() async throws -> SpotifyUserProfile
     func playback() async throws -> SpotifyPlayback?
     func queue() async throws -> [SpotifyQueueItem]
@@ -44,6 +46,12 @@ protocol SpotifyServing {
     func searchPlaylistCandidates(query: String, limit: Int) async throws -> [SpotifyResolvedPlaylist]
     func createPlaylist(name: String, description: String) async throws -> SpotifyResolvedPlaylist
     func setPlaylistTracks(_ playlist: SpotifyResolvedPlaylist, tracks: [SpotifyResolvedTrack]) async throws
+}
+
+extension SpotifyServing {
+    func execute(_ action: SpotifyAction) async throws -> VibeCastResult {
+        try await execute(action, deviceID: nil)
+    }
 }
 
 @MainActor
@@ -71,43 +79,46 @@ final class SpotifyAPIClient: SpotifyServing {
         return response.devices
     }
 
-    func execute(_ action: SpotifyAction) async throws -> VibeCastResult {
+    func execute(_ action: SpotifyAction, deviceID: String? = nil) async throws -> VibeCastResult {
         var resolved: String?
         var playlist: SpotifyResolvedPlaylist?
+        let target = deviceID.flatMap { $0.isEmpty ? nil : $0 }.map { ["device_id": $0] }
         switch action {
-        case .pause: try await send(method: "PUT", path: "/me/player/pause")
+        case .pause: try await send(method: "PUT", path: "/me/player/pause", query: target ?? [:])
         case .resume:
-            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery())
-        case .next: try await send(method: "POST", path: "/me/player/next")
-        case .previous: try await send(method: "POST", path: "/me/player/previous")
+            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(preferred: target))
+        case .next: try await send(method: "POST", path: "/me/player/next", query: target ?? [:])
+        case .previous: try await send(method: "POST", path: "/me/player/previous", query: target ?? [:])
         case .advanceQueue(_, let id):
             try await send(method: "POST", path: "/me/player/next", query: ["device_id": id])
+        case .rewindQueue(_, let id):
+            try await send(method: "POST", path: "/me/player/previous", query: ["device_id": id])
         case .seek(let position, let uri):
             guard let current = try await playback(), current.item?.uri == uri,
                   let duration = current.item?.durationMS, position >= 0, position < duration,
                   let device = current.device, device.isRestricted != true, let id = device.id,
-                  !id.isEmpty, current.actions?.disallows?["seeking"] != true else {
+                  !id.isEmpty, (deviceID == nil || id == deviceID), current.actions?.disallows?["seeking"] != true else {
                 throw UserFacingError("The song or Spotify device changed, or seeking isn't available. Refresh the player and try again.")
             }
             try await send(method: "PUT", path: "/me/player/seek", query: ["position_ms": String(position), "device_id": id])
         case .shuffle(let enabled):
-            try await send(method: "PUT", path: "/me/player/shuffle", query: ["state": String(enabled)])
+            try await send(method: "PUT", path: "/me/player/shuffle", query: (target ?? [:]).merging(["state": String(enabled)]) { _, new in new })
         case .repeatMode(let mode):
-            try await send(method: "PUT", path: "/me/player/repeat", query: ["state": mode.rawValue])
+            try await send(method: "PUT", path: "/me/player/repeat", query: (target ?? [:]).merging(["state": mode.rawValue]) { _, new in new })
         case .playTrack(let query), .queueTrack(let query):
             let candidates = try await searchTrackCandidates(query: "track:\"\(query.title)\" artist:\"\(query.artist ?? "")\"", limit: 8)
             guard let track = MusicSearch.matchTrack(title: query.title, artist: query.artist, candidates: candidates) else {
                 throw SpotifyAPIError.missingTrack
             }
-            return try await execute(action.isQueue ? .queueResolvedTrack(track) : .playResolvedTrack(track))
+            return try await execute(action.isQueue ? .queueResolvedTrack(track) : .playResolvedTrack(track), deviceID: deviceID)
         case .playResolvedTrack(let track):
-            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(), body: ["uris": [track.uri]])
+            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(preferred: target), body: ["uris": [track.uri]])
             resolved = track.displayName
         case .queueResolvedTrack(let track):
-            try await send(method: "POST", path: "/me/player/queue", query: ["uri": track.uri])
+            try await send(method: "POST", path: "/me/player/queue", query: (target ?? [:]).merging(["uri": track.uri]) { _, new in new })
             resolved = track.displayName
         case .playResolvedPlaylist(let value):
-            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(), body: ["context_uri": value.uri])
+            try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(preferred: target), body: ["context_uri": value.uri])
             resolved = value.name
             playlist = value
         case .transferToDevice(let target):
@@ -164,7 +175,8 @@ final class SpotifyAPIClient: SpotifyServing {
         return page.playlists.items.compactMap { $0?.resolvedPlaylist }
     }
 
-    private func deviceQuery() async throws -> [String: String] {
+    private func deviceQuery(preferred: [String: String]? = nil) async throws -> [String: String] {
+        if let preferred { return preferred }
         let page: SpotifyDevicesResponse = try await request(path: "/me/player/devices")
         let available = page.devices.filter { $0.id != nil && $0.isRestricted != true }
         guard let device = available.first(where: \.isActive) ?? available.first, let id = device.id else {
@@ -205,6 +217,8 @@ final class SpotifyAPIClient: SpotifyServing {
         AppLogger.spotify.error("Spotify request failed: \(method, privacy: .public) \(path, privacy: .public) status=\(status, privacy: .public)")
         switch status {
         case 401: throw SpotifyAPIError.unauthorized
+        case 403 where path.hasPrefix("/me/player"):
+            throw SpotifyAPIError.playbackRefused(path: path, reason: SpotifyPlaybackRefusal.decode(data))
         case 403: throw SpotifyAPIError.refused(path: path, message: "")
         case 404 where path.hasPrefix("/me/player"): throw SpotifyAPIError.noAvailableDevices
         case 429: throw SpotifyAPIError.rateLimited(retryAfter)

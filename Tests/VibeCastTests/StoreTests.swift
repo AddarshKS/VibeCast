@@ -5,6 +5,7 @@ import Testing
 @MainActor
 final class FakeSpotify: SpotifyServing {
     var actions: [SpotifyAction] = []
+    var actionDeviceIDs: [String?] = []
     var creations = 0
     var writes = 0
     var failWrite = false
@@ -12,12 +13,20 @@ final class FakeSpotify: SpotifyServing {
     var searchDelay = false
     var failAction = false
     var holdProfile = false
+    var profileError: (any Error)?
+    var profileReads = 0
     var profileReply: CheckedContinuation<SpotifyUserProfile, Never>?
     var holdCreation = false
     var creationReply: CheckedContinuation<SpotifyResolvedPlaylist, Never>?
     let found = SpotifyResolvedPlaylist(uri: "spotify:playlist:found", name: "Soft Rock", ownerName: "Spotify", description: nil)
     func profile() async throws -> SpotifyUserProfile {
-        if holdProfile { return await withCheckedContinuation { profileReply = $0 } }
+        profileReads += 1
+        if let profileError { throw profileError }
+        if holdProfile {
+            let profile = await withCheckedContinuation { profileReply = $0 }
+            if let profileError { throw profileError }
+            return profile
+        }
         return SpotifyUserProfile(id: "alice", displayName: "Alice")
     }
     var playbackValue: SpotifyPlayback?
@@ -27,6 +36,8 @@ final class FakeSpotify: SpotifyServing {
     var playbackReply: CheckedContinuation<SpotifyPlayback?, Never>?
     var playbackReads = 0
     var queueValue: [SpotifyQueueItem] = []
+    var queueReads = 0
+    var previousItems: [SpotifyTrack] = []
     var deviceValues: [SpotifyDevice] = []
     func devices() async throws -> [SpotifyDevice] { deviceValues }
     var queueFailure = false
@@ -39,12 +50,14 @@ final class FakeSpotify: SpotifyServing {
         return playbackValue
     }
     func queue() async throws -> [SpotifyQueueItem] {
+        queueReads += 1
         if holdQueue { return await withCheckedContinuation { queueReply = $0 } }
         if queueFailure { throw UserFacingError("Queue unavailable") }
         return queueValue
     }
-    func execute(_ action: SpotifyAction) async throws -> VibeCastResult {
+    func execute(_ action: SpotifyAction, deviceID: String? = nil) async throws -> VibeCastResult {
         actions.append(action)
+        actionDeviceIDs.append(deviceID)
         if failAction { throw UserFacingError("Spotify control failed") }
         if applyControls {
             let old = playbackValue
@@ -71,6 +84,8 @@ final class FakeSpotify: SpotifyServing {
                     let next = queueValue.removeFirst()
                     item = SpotifyTrack(uri: next.uri, name: next.name, artists: next.artists ?? [], album: next.album, isPlayable: true)
                 }
+            case .rewindQueue:
+                if !previousItems.isEmpty { item = previousItems.removeLast() }
             default: break
             }
             playbackValue = SpotifyPlayback(isPlaying: playing, item: item, device: device,
@@ -123,7 +138,8 @@ final class FakeNotifications: Notifying {
 
 @MainActor
 final class StoreTests {
-    func fixture(defaults: UserDefaults? = nil, api: FakeSpotify? = nil, lyrics: any LyricsServing = FixedLyrics()) async throws
+    func fixture(defaults: UserDefaults? = nil, api: FakeSpotify? = nil, lyrics: any LyricsServing = FixedLyrics(),
+                 accountRetryDelay: TimeInterval = 30) async throws
         -> (VibeCastStore, FakeSpotify, FakePlanner, FakeNotifications, UserDefaults) {
         let defaults = defaults ?? UserDefaults(suiteName: UUID().uuidString)!
         let settings = AppSettings(defaults: defaults)
@@ -139,7 +155,7 @@ final class StoreTests {
         let chatGPT = ChatGPTSession(settings: settings, rpc: codex)
         let store = VibeCastStore(settings: settings, secrets: secrets, spotify: api, planner: planner,
                                   notifications: notifications, defaults: defaults, startAutomatically: false, chatGPT: chatGPT,
-                                  controlConfirmationDelay: .zero, lyrics: lyrics)
+                                  controlConfirmationDelay: .zero, lyrics: lyrics, accountRetryDelay: accountRetryDelay)
         await store.refreshAuthState()
         return (store, api, planner, notifications, defaults)
     }

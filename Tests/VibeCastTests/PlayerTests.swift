@@ -20,8 +20,48 @@ actor HeldLyrics: LyricsServing {
 
 @MainActor
 struct PlayerTests {
+    @Test func queueAndHistoryShareDurationsAndMissingDurationFallback() throws {
+        let item = try JSONDecoder().decode(SpotifyQueueItem.self, from: Data(#"{"uri":"spotify:track:one","name":"One","duration_ms":213000}"#.utf8))
+        #expect(item.durationText == "3:33")
+        #expect(Self.track.queueItem.durationText == item.durationText)
+        let missing = try JSONDecoder().decode(SpotifyQueueItem.self, from: Data(#"{"uri":"spotify:track:one","name":"One"}"#.utf8))
+        #expect(missing.durationText == "--:--")
+    }
     static let track = SpotifyTrack(uri: "spotify:track:test", name: "Evening Light", artists: [.init(name: "The Test Band")],
                                     album: SpotifyAlbum(images: nil, name: "After Hours"), isPlayable: true, durationMS: 213000)
+
+    @Test func historyGrowsChronologicallyCapsAtFiveAndIgnoresRepeatedPolls() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        for index in 0...7 {
+            let track = SpotifyTrack(uri: "spotify:track:\(index)", name: "Song \(index)", artists: [], album: nil, isPlayable: true)
+            api.playbackValue = SpotifyPlayback(isPlaying: true, item: track, device: nil, shuffleState: false, repeatState: "off")
+            await store.refreshPlayback()
+            await store.refreshPlayback()
+            #expect(store.playerDetails.recentlyPlayed.map(\.name) == (max(0, index - 5)..<index).map { "Song \($0)" })
+        }
+        api.playbackValue = nil
+        await store.refreshPlayback()
+        #expect(store.playerDetails.recentlyPlayed.count == 5)
+        api.playbackValue = SpotifyPlayback(isPlaying: false, item: Self.track, device: nil, shuffleState: true, repeatState: "off")
+        await store.refreshPlayback()
+        #expect(store.playerDetails.recentlyPlayed.last?.name == "Song 7")
+        await store.refreshPlayback()
+        #expect(store.playerDetails.recentlyPlayed.count == 5)
+        store.logout()
+        #expect(store.playerDetails.recentlyPlayed.isEmpty)
+    }
+
+    @Test func confirmedControlsRecordActualPreviousSongButShuffleDoesNot() async throws {
+        let (store, api, _, _, _) = try await StoreTests().fixture()
+        api.playbackValue = SpotifyPlayback(isPlaying: true, item: Self.track, device: nil, shuffleState: false, repeatState: "off")
+        await store.refreshPlayback()
+        store.control(.next)
+        await store.waitUntilIdle()
+        #expect(store.playerDetails.recentlyPlayed.map(\.uri) == [Self.track.uri])
+        store.control(.shuffle(true))
+        await store.waitUntilIdle()
+        #expect(store.playerDetails.recentlyPlayed.count == 1)
+    }
 
     @Test func queueUsesOfficialEndpointAndHandlesEpisodesNullsAndDuplicates() async throws {
         let transport = StubTransport([.init(status: 200, json: #"{"queue":[null,{"uri":"spotify:track:one","name":"One","artists":[{"name":"Artist"}]},{"uri":"spotify:episode:two","name":"Two","show":{"name":"Show"}},{"uri":"spotify:track:one","name":"One","artists":[]}]}"#)])

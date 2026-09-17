@@ -7,6 +7,7 @@ enum SpotifyAction: Equatable {
     case previous
     case seek(positionMS: Int, trackURI: String)
     case advanceQueue(trackURI: String, deviceID: String)
+    case rewindQueue(trackURI: String, deviceID: String)
     case shuffle(Bool)
     case repeatMode(SpotifyRepeatMode)
     case playTrack(query: TrackQuery)
@@ -31,6 +32,8 @@ enum SpotifyAction: Equatable {
             "Moved to lyric"
         case .advanceQueue:
             "Moved forward in queue"
+        case .rewindQueue:
+            "Moved back in queue"
         case .shuffle(let enabled):
             enabled ? "Shuffle on" : "Shuffle off"
         case .repeatMode(let mode):
@@ -66,6 +69,8 @@ enum SpotifyAction: Equatable {
             "Seek to \(position) ms"
         case .advanceQueue:
             "Advance existing Spotify queue"
+        case .rewindQueue:
+            "Rewind existing Spotify queue"
         case .shuffle(let enabled):
             enabled ? "Enable shuffle" : "Disable shuffle"
         case .repeatMode(let mode):

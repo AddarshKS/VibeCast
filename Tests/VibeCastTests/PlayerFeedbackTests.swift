@@ -4,12 +4,14 @@ import Testing
 
 @MainActor
 struct PlayerFeedbackTests {
-    @Test func readingPanelsKeepSameHeightWhileLoadingAndSwitching() {
-        let heights = [0.0, 40, 300, 1800].map {
-            PanelSizing.bodyHeight(content: $0, top: 260, bottom: 90, maximum: 680, readingPanel: true)
+    @Test func readingPanelsKeepSameDefaultHeightAndFitTheScreen() {
+        let state = PlayerPresentation()
+        for panel in [PlayerPanel.lyrics, .queue] {
+            state.selectPanel(panel)
+            #expect(state.desiredHeight(natural: PlayerPresentation.readingHeight) == 544)
         }
-        #expect(heights.allSatisfy { $0 == 320 })
-        #expect(PanelSizing.bodyHeight(content: 1800, top: 260, bottom: 90, maximum: 500, readingPanel: true) == 150)
+        state.maximumHeight = 500
+        #expect(state.desiredHeight(natural: PlayerPresentation.readingHeight) == 500)
     }
 
     @Test func buttonsAreQuietButKeepDeveloperHistory() async throws {

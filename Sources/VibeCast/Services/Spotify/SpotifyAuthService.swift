@@ -12,16 +12,18 @@ final class SpotifyAuthService: SpotifyAuthorizing {
     private let settings: AppSettings
     private let secrets: any SecretStoring
     private let transport: any HTTPTransport
-    private let loginReceiver = LoopbackLogin()
+    private let loginReceiver: any SpotifyLoginReceiving
     private var cachedToken: SpotifyToken?
     private var refreshTask: Task<String, Error>?
     private var generation = UUID()
     private var account: String { "spotify.\(settings.spotifyClientID).\(settings.serviceAddress)" }
 
-    init(settings: AppSettings, secrets: any SecretStoring, transport: any HTTPTransport = URLSessionTransport()) {
+    init(settings: AppSettings, secrets: any SecretStoring, transport: any HTTPTransport = URLSessionTransport(),
+         loginReceiver: any SpotifyLoginReceiving = LoopbackLogin()) {
         self.settings = settings
         self.secrets = secrets
         self.transport = transport
+        self.loginReceiver = loginReceiver
     }
 
     func currentToken() throws -> SpotifyToken? {
@@ -36,6 +38,10 @@ final class SpotifyAuthService: SpotifyAuthorizing {
         guard settings.hasSpotifyConfiguration else {
             throw UserFacingError("Spotify isn't configured for this build. Open Settings to finish setup.")
         }
+        // A refresh from the previous session must never overwrite this sign-in.
+        generation = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
         let nonce = generation
         let verifier = UUID().uuidString + UUID().uuidString
         let state = UUID().uuidString
@@ -61,6 +67,9 @@ final class SpotifyAuthService: SpotifyAuthorizing {
         ])
         try Task.checkCancellation()
         guard generation == nonce else { throw CancellationError() }
+        generation = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
         try save(response.token())
     }
 

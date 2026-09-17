@@ -72,6 +72,30 @@ final class FakeCodexRPC: CodexRPC {
 
 @MainActor
 struct SubscriptionTests {
+    @Test func appRestoresSubscriptionWithoutOpeningSettingsOrRequiringSpotify() async throws {
+        let (session, rpc, settings) = fixture()
+        let store = VibeCastStore(settings: settings, secrets: MemorySecrets(), spotify: FakeSpotify(),
+                                 planner: FakePlanner(), notifications: FakeNotifications(), chatGPT: session)
+        for _ in 0..<100 where !session.hasCheckedAccount { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(session.hasCheckedAccount)
+        #expect(session.account?.type == "chatgpt")
+        #expect(rpc.requests.contains { $0.method == "account/read" })
+        #expect(!store.authState.isLoggedIn)
+    }
+
+    @Test func otherProvidersDoNotStartSubscriptionRestore() async throws {
+        for provider in [AIProvider.hosted, .personalAPI] {
+            let (session, rpc, settings) = fixture()
+            settings.aiProvider = provider
+            let store = VibeCastStore(settings: settings, secrets: MemorySecrets(), spotify: FakeSpotify(),
+                                     planner: FakePlanner(), notifications: FakeNotifications(), chatGPT: session)
+            try await Task.sleep(for: .milliseconds(30))
+            #expect(rpc.starts == 0)
+            #expect(!session.hasCheckedAccount)
+            #expect(!store.authState.isLoggedIn)
+        }
+    }
+
     private func fixture(timeout: TimeInterval = 2) -> (ChatGPTSession, FakeCodexRPC, AppSettings) {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
         settings.aiProvider = .chatGPT

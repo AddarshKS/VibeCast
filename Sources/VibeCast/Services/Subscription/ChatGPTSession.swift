@@ -47,6 +47,7 @@ struct ChatGPTUsage: Decodable, Sendable {
 final class ChatGPTSession: ObservableObject, PlaylistPlanning {
     let diagnostics = DiagnosticLog()
     @Published private(set) var account: ChatGPTAccount?
+    @Published private(set) var hasCheckedAccount = false
     @Published private(set) var models: [ChatGPTModel] = []
     @Published private(set) var usage: ChatGPTUsage?
     @Published private(set) var isBusy = false
@@ -148,6 +149,7 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
                 try await connect()
                 let _: Empty = try await call("account/logout")
                 account = nil
+                hasCheckedAccount = true
                 usage = nil
                 models = []
             } catch { self.error = error.localizedDescription }
@@ -229,6 +231,7 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
 
     private func loadAccount() async throws {
         let result: AccountResponse = try await call("account/read", ["refreshToken": true])
+        hasCheckedAccount = true
         guard result.account == nil || result.account?.type == "chatgpt" else {
             account = nil
             models = []

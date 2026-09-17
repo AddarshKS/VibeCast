@@ -139,11 +139,17 @@ struct SpotifyQueueItem: Decodable {
     let images: [SpotifyImage]?
     let show: Show?
     var isPlayable: Bool? = nil
+    var durationMS: Int? = nil
     enum CodingKeys: String, CodingKey {
         case uri, name, artists, album, images, show
         case isPlayable = "is_playable"
+        case durationMS = "duration_ms"
     }
     struct Show: Decodable { let name: String }
+    var durationText: String {
+        guard let durationMS, durationMS > 0 else { return "--:--" }
+        return "\(durationMS / 60000):\(String(format: "%02d", durationMS / 1000 % 60))"
+    }
     var playableTrack: SpotifyResolvedTrack? {
         guard uri.hasPrefix("spotify:track:"), spotifyURL != nil, isPlayable != false else { return nil }
         return SpotifyResolvedTrack(uri: uri, title: name, artist: subtitle, artworkURL: artworkURL)
@@ -157,3 +163,12 @@ struct SpotifyQueueItem: Decodable {
         return URL(string: "https://open.spotify.com/\(parts[1])/\(parts[2])")
     }
 }
+
+extension SpotifyTrack {
+    var queueItem: SpotifyQueueItem {
+        SpotifyQueueItem(uri: uri, name: name, artists: artists, album: album, images: nil,
+                         show: nil, isPlayable: isPlayable, durationMS: durationMS)
+    }
+}
+
+enum PlayerList { case upcoming, history }

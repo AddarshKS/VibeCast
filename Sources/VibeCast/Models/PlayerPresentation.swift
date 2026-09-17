@@ -3,60 +3,84 @@ import Foundation
 
 @MainActor
 final class PlayerPresentation: ObservableObject {
-    enum Layout: Equatable { case standard, queue, lyrics, focusedLyrics }
-    static let minimumHeight: CGFloat = 405
+    enum Layout: Equatable { case standard, queue, lyrics, miniplayer }
+    static let density = PlayerDensity.compact
+    static let width = density.width
+    static let minimumHeight: CGFloat = 344
+    static let readingHeight: CGFloat = 544
 
     @Published var isDetached = false
     @Published var maximumHeight: CGFloat = 680
     @Published var windowHeight: CGFloat?
-    @Published var panel: PlayerPanel?
+    @Published var panel: PlayerPanel? {
+        didSet {
+            if panel == .queue, oldValue != .queue { queueActivation += 1 }
+        }
+    }
+    private(set) var queueActivation = 0
     @Published var advanced = false
-    @Published private(set) var lyricsFocused = false
-    private(set) var standardHeight: CGFloat?
-    private(set) var focusedHeight: CGFloat?
+    @Published private(set) var miniplayer = false
+    @Published private(set) var miniplayerPanel: PlayerPanel?
+    private(set) var miniplayerDetailHeight: CGFloat = width
+    private(set) var miniplayerQueueActivation = 0
+    private(set) var readingHeights: [PlayerPanel: CGFloat] = [:]
 
     var layout: Layout {
         if advanced { return .standard }
+        if miniplayer { return .miniplayer }
         if panel == .queue { return .queue }
-        if panel == .lyrics && lyricsFocused { return .focusedLyrics }
         if panel == .lyrics { return .lyrics }
         return .standard
     }
 
-    var isHeightLocked: Bool { !isDetached || layout == .queue || layout == .lyrics }
+    var isReading: Bool { layout == .lyrics || layout == .queue }
+    var isHeightLocked: Bool { !isDetached || !isReading }
+    var showsComposer: Bool { advanced || (panel == nil && !miniplayer) }
 
     func selectPanel(_ panel: PlayerPanel?) {
-        lyricsFocused = false
+        miniplayerPanel = nil
+        miniplayer = false
         self.panel = panel
     }
 
-    func toggleLyricsFocus() {
-        guard !advanced, panel == .lyrics else { return }
-        lyricsFocused.toggle()
+    func toggleMiniplayer() {
+        advanced = false
+        miniplayerPanel = nil
+        panel = nil
+        miniplayer.toggle()
+    }
+
+    func toggleMiniplayerPanel(_ panel: PlayerPanel) {
+        guard miniplayer, !advanced, panel == .lyrics || panel == .queue else { return }
+        if miniplayerPanel == nil { miniplayerDetailHeight = windowHeight ?? Self.width }
+        miniplayerPanel = miniplayerPanel == panel ? nil : panel
+        if miniplayerPanel == .queue { miniplayerQueueActivation += 1 }
+    }
+
+    func toggleAdvanced() {
+        selectPanel(nil)
+        advanced.toggle()
     }
 
     func resetWindowSize() {
-        standardHeight = nil
-        focusedHeight = nil
+        readingHeights.removeAll()
         windowHeight = nil
     }
 
     func recordResize(_ height: CGFloat) {
-        guard height.isFinite, isDetached, !isHeightLocked else { return }
+        guard height.isFinite, isDetached, !isHeightLocked, let panel else { return }
         let height = constrained(height)
-        if layout == .focusedLyrics { focusedHeight = height }
-        else { standardHeight = height }
+        readingHeights[panel] = height
         windowHeight = height
     }
 
     func desiredHeight(natural: CGFloat) -> CGFloat {
         let height: CGFloat
         switch layout {
-        case .standard: height = standardHeight ?? natural
-        case .queue, .lyrics: height = natural
-        case .focusedLyrics: height = focusedHeight ?? windowHeight ?? natural
+        case .standard, .miniplayer: height = natural
+        case .queue, .lyrics: height = isDetached ? (panel.flatMap { readingHeights[$0] } ?? natural) : natural
         }
-        return constrained(height)
+        return isReading ? constrained(height) : min(max(1, height), maximumHeight)
     }
 
     private func constrained(_ height: CGFloat) -> CGFloat {

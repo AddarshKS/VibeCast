@@ -10,6 +10,8 @@ final class PlayerDetailsStore: ObservableObject {
     @Published private(set) var queue: PlayerLoadState<[SpotifyQueueItem]> = .idle
     @Published private(set) var lyrics: PlayerLoadState<Lyrics> = .idle
     @Published private(set) var devices: PlayerLoadState<[SpotifyDevice]> = .idle
+    @Published private(set) var recentlyPlayed: [SpotifyTrack] = []
+    private var observedTrack: SpotifyTrack?
     private let spotify: any SpotifyServing
     private let provider: any LyricsServing
     private var queueGeneration = UUID()
@@ -20,6 +22,15 @@ final class PlayerDetailsStore: ObservableObject {
     init(spotify: any SpotifyServing, lyrics: any LyricsServing = LyricsClient()) {
         self.spotify = spotify
         self.provider = lyrics
+    }
+
+    // Session-local history follows confirmed playback, not button presses or queue predictions.
+    func observePlayback(_ playback: SpotifyPlayback?) {
+        guard let track = playback?.item else { return }
+        if let previous = observedTrack, previous.uri != track.uri {
+            recentlyPlayed = Array((recentlyPlayed + [previous]).suffix(5))
+        }
+        observedTrack = track
     }
 
     func refreshQueue() async {
@@ -74,6 +85,8 @@ final class PlayerDetailsStore: ObservableObject {
     }
 
     func reset() {
+        observedTrack = nil
+        recentlyPlayed = []
         queueGeneration = UUID()
         lyricsGeneration = UUID()
         lyricsTrackURI = nil

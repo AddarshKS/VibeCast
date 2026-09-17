@@ -1,17 +1,38 @@
 # VibeCast Project Status
 
-Updated September 16, 2026.
+UI freeze: the owner approved the compact player on `codex/compact-dropdown-experiment`, originally stacked on `codex/public-beta` (PR #1). The player-reliability integration carries that UI checkpoint forward without redesigning it. Preserve the approved UI while completing review and request readiness; further UI changes need an explicit request. See [compact player scope and verification](COMPACT_DROPDOWN_EXPERIMENT.md).
+
+Updated September 17, 2026.
+
+## Post-Freeze Reliability Pass
+
+The owner deferred a future landing-page title treatment and a possible height adjustment to match lyrics/queue windows. Neither is part of this pass; the accepted UI and layout remain unchanged.
+
+Before this integration, GitHub verification found PR #1 merged to `main` before PR #2 merged to `codex/public-beta`. Both PRs were merged, but `main` at `198ca09` did not include the compact UI. The UI checkpoint `b181dcc` matches `codex/public-beta` at `0f8b468` by file tree. This integration from `codex/player-reliability` to `main` combines that complete UI checkpoint with the reliability fixes; once merged, no separate UI reconciliation PR is needed. See [reviewer setup and merge reconciliation](BOT_REVIEW_SETUP.md).
+
+Work on `codex/player-reliability` fixes short/delayed restart confirmation, stale confirmation samples, device-bound transport commands, delayed seek confirmation, a refresh-versus-sign-in race, and recovery from transient account-restore failures. Playback 403s now distinguish known restrictions, missing scopes, and an explicit Premium requirement; unknown failures no longer assert that Premium is missing. Advanced diagnostics record the failed endpoint, safe reason classification, and observed shuffle state without raw server payloads or credentials.
+
+Shuffle already uses Spotify's official shuffle endpoint. The reported Previous failure was a real HTTP 403, not just a confirmation timeout. On September 17, the owner retested the updated installed app and confirmed that Previous now works with Shuffle enabled. The original server refusal reason was not captured, so the successful live test should not be presented as proof of its exact cause or as a guarantee against other Spotify-side restrictions.
+
+Direct queue/history jumping remains deferred after the owner's clarification: do not replace Spotify's playback context to simulate preserving the queue. Reading the upcoming list and starting a new list from the selection is technically different from jumping within Spotify's existing queue. Session-local Recently Played also must not be assumed to match Spotify's backward navigation stack, particularly after rewinding. The existing guarded sequential behavior remains provisional, and this audit does not declare it reliable for every history path. A future agent-based approach requires separate investigation.
+
+Verification for this pass: 170 Swift tests across 19 suites passed with visual rendering enabled; all 17 native presentation tests passed separately; routing checks passed all four cases; the optional service passed all nine tests. New regression cases cover early/delayed restarts, slow responses that must not manufacture a restart or seek, device-bound commands, classified 403 errors without automatic retries, competing sign-in/refresh operations, and cancellation-safe account recovery. No view, presentation, or queue-navigation implementation was changed. The updated development bundle was packaged, installed at `/Applications/VibeCast.app`, and verified running.
+
+Live verification was performed by the owner; automated inspection could read Spotify but could not open VibeCast's menu-bar-only window. If Previous is rejected again, capture the new message and the `HTTP 403 /me/player/previous; reason=...` entry in Adv, then compare the same control in Spotify. The owner approved committing, publishing, and merging this integration after the successful live test. Reviewer installation and live AI request testing remain separate work.
 
 ## Accepted baseline
 
 The owner considers UI/UX and normal player-controller functionality complete for this development milestone. After the latest dropdown layout change, the owner reported zero flutter. Preserve this baseline while working on requests; it is not a claim of public-release readiness or exhaustive device/accessibility testing.
 
-- Shared dropdown and detachable player, fixed width, stable fullscreen anchoring, outside-click/status-icon dismissal, and an independent Settings window.
+- Shared dropdown and detachable player at 340-point width, stable fullscreen anchoring, outside-click/status-icon dismissal, and an independent Settings window.
 - Movable, normal-level pop-out window, menu-bar activation, immediate return to the dropdown, selective vertical resizing, and reset of custom sizes on redocking.
 - Playback controls with serialized actions and confirmation guards; Spotify Connect device selection only, without changing system audio settings.
-- Normal lyrics, synchronized highlighting, clickable timed lines, scrollable lyrics/queue with hidden scrollbars, and cached lyric results for the current track.
-- Sparkles entry/exit button and ripple-based Lyrics Mode in both containers, with the same lyric font size. Dropdown focus retains normal lyrics height; detaching keeps focus and makes it vertically resizable.
-- Quiet success feedback for player buttons; typed requests and failures remain visible. The request field, suggestions, and Adv/Player switch share the same UI in either container.
+- Lyrics and queue controls open their reading modes directly, with compact song headers, playback controls below, ripple transitions, and independent remembered heights in pop-out windows. The former intermediate pages and sparkles toggle are removed.
+- Synced lyric emphasis, clickable timed lines, top-to-center following, a floating sync button, hidden scrollbars, and cached lyric results for the current track. Both normal and mini lyrics share the same layout font and subtle active-line emphasis.
+- Immersive is the only miniplayer: edge-to-edge artwork, a dark fade, always-visible controls, and separate fixed-size lyrics/queue screens over blurred artwork. The eight-dot drag grip is retained only in miniplayer windows, not normal reading windows. Custom reading headers retain the approved artist-to-divider spacing.
+- Queue opens at Next Up, with up to five session-local history entries above it. Both normal and mini queues share the resisted pull-and-snap behavior, history-growth protections, and immediate refresh on detected track changes.
+- Landing retains its title, spacing, three renamed inspirations without trailing arrows, and request field. Requests remain on landing and Advanced View only. Quiet success feedback for player buttons is preserved; typed requests and failures remain visible.
+- Settings, Advanced View, quit, contact, and connection status live in the menu-bar icon's right-click menu. Settings retains save-only-when-changed behavior and consistent advanced-section spacing.
 - Installed `/Applications/VibeCast.app`, monochrome branding, and packaged resources. Local development signing is not public distribution signing.
 
 ## Architecture contract
@@ -20,7 +41,7 @@ One player, two containers. Features belong to the shared player, not to a pop-o
 
 Keep only window-specific concerns conditional: resizing, dragging, dismissal, anchoring, activation, and surface decoration. Both containers use the height AppKit has allocated, rather than displaying a larger content layout before the native surface grows. Preserve this ordering when modifying layout.
 
-Detached standard view and Lyrics Mode can resize vertically, with a 405-point minimum subject to screen capacity. Queue and normal lyrics temporarily lock their height. Width stays at 400 points. Redocking resets only custom sizes, preserving Lyrics Mode at the normal fixed dropdown lyrics height. Panel selection, Advanced View, and drafts also survive container changes. Dropdown Lyrics Mode itself never enables resizing.
+Only detached normal lyrics and queue modes can resize vertically, with a 344-point minimum subject to screen capacity. Their dropdown versions use a fixed 544-point height, capped to available screen space. Width stays at 340 points. Landing, device picker, Advanced View, and miniplayer fit content automatically but cannot be manually resized. Redocking clears custom heights without clearing the selected panel, miniplayer detail, Advanced View, or draft. Artwork rendering and ripple transitions preserve view identity to avoid flashing during container or mode changes.
 
 ## Request behavior today
 
@@ -61,7 +82,7 @@ Request routing, recommendation confirmation, playlist planning/catalog matching
 
 ## Verification and handoff
 
-The latest implementation passed the full Swift test run with visual rendering (runner reported 95 tests across 12 suites; environment-gated live/native tests are not all enabled in that run), plus all 10 tests in the separately enabled native presentation suite, including repeated round trips that retain Lyrics Mode, panels, Advanced View, and draft text. The routing-only run passed four tests and the optional Node service passed nine tests at the preceding checkpoint. The installed bundle was verified running, and the owner confirmed the visual fix. Live AI playlist generation is not covered by those results.
+At this UI-freeze checkpoint, the full Swift test run with visual rendering passed 154 tests across 18 suites. The separately enabled native presentation suite passed all 17 tests, including container round trips, resizing, anchoring, and retained player state. The routing-only run passed four tests, and the optional Node service passed nine tests. The owner accepted the installed UI before the freeze; no UI code was changed during the final documentation and commit pass. Environment-gated subscription smoke tests and live AI playlist generation were not enabled by these commands, and musical quality remains unvalidated.
 
 ```sh
 ./script/run_routing_checks.sh
@@ -77,4 +98,5 @@ Checkpoint history before this documentation update:
 
 - `bff9b0b`: working player, lyrics, and detachable window baseline.
 - `d93e6ac`: polished Lyrics Mode, resizing, sparkles control, and menu dismissal checkpoint.
-- The following implementation adds dropdown Lyrics Mode, shared allocated-height layout, and preserved Lyrics Mode when popping out; it is included with this status update.
+- `3832eb8`: compact player layouts, queue gestures, and hover states.
+- Current UI-freeze checkpoint: immersive miniplayer and custom reading screens, direct normal reading modes, shared artwork caching, stable queue anchoring, and the owner-approved final spacing and controls.
