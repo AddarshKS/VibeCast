@@ -96,7 +96,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 500, idealWidth: 520, maxWidth: .infinity, minHeight: 620, idealHeight: 680, maxHeight: .infinity)
         .modifier(SettingsGlass())
-        .modifier(SettingsFirstClick())
+        .modifier(WindowFirstClick())
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)).allowsHitTesting(false))
         .tint(.teal)

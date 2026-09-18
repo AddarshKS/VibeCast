@@ -53,6 +53,7 @@ struct ImmersiveMiniplayerView: View {
                 }
 
                 PlayerWindowButton(detached: presentation.isDetached, action: toggleWindow)
+                    .measureRippleOrigin("mini-window")
                     .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
                     .frame(width: ImmersiveArtworkExitArea.cornerSize, height: ImmersiveArtworkExitArea.cornerSize)
                     .frame(maxWidth: .infinity, alignment: .trailing)

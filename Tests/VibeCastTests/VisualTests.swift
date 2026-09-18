@@ -76,6 +76,54 @@ struct VisualTests {
                          scheme: .light, width: 340, height: 340)
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"), arguments: [PlayerPanel.lyrics, .queue])
+    func miniDetailsDoNotReserveMainPlayerDragHandle(panel: PlayerPanel) async throws {
+        _ = NSApplication.shared
+        let (store, _, _, _, _) = try await StoreTests().fixture()
+        let state = PlayerPresentation()
+        state.windowHeight = 340
+        state.toggleMiniplayer()
+        var origins: [String: CGPoint] = [:]
+        let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state)
+            .onPreferenceChange(RippleOrigins.self) { origins = $0 })
+        host.sizingOptions = []
+        host.safeAreaRegions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 340),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        var dropdownHeaderY: CGFloat?
+        for detached in [false, true, false] {
+            state.isDetached = detached
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            let gripPoint = host.convert(NSPoint(x: 170, y: 6), to: host.superview)
+            let mainHit = try #require(host.hitTest(gripPoint))
+            let mainWindowButton = try #require(origins["mini-window"])
+            #expect(abs(mainWindowButton.x - 314) < 0.5 && abs(mainWindowButton.y - 26) < 0.5)
+            #expect((String(describing: type(of: mainHit)) == "DragView") == detached,
+                    "Only the detached main miniplayer should expose the eight-dot drag handle.")
+            state.toggleMiniplayerPanel(panel)
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            let detailHit = try #require(host.hitTest(gripPoint))
+            #expect(String(describing: type(of: detailHit)) != "DragView",
+                    "Custom lyrics and queue must not retain the main miniplayer's grip.")
+            let headerY = try #require(origins["mini-\(panel.rawValue)-exit"]).y
+            let detailWindowButton = try #require(origins["mini-window"])
+            #expect(abs(detailWindowButton.x - mainWindowButton.x) < 0.5
+                    && abs(detailWindowButton.y - mainWindowButton.y) < 0.5,
+                    "The PiP button must stay fixed across the miniplayer and both custom modes.")
+            if let dropdownHeaderY {
+                #expect(abs(headerY - dropdownHeaderY) < 0.5,
+                        "Detaching must not reserve extra top space for an absent handle.")
+            } else {
+                dropdownHeaderY = headerY
+            }
+            state.toggleMiniplayerPanel(panel)
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"), arguments: 0...5, [false, true])
     func queueHeaderStaysAlignedThroughoutOpeningAndRefresh(historyCount: Int, mini: Bool) async throws {
         _ = NSApplication.shared
@@ -529,7 +577,8 @@ struct VisualTests {
         defer { window.contentView = nil }
         try await Task.sleep(for: .milliseconds(200))
         let landingHeight = natural
-        #expect(landingHeight == 418, "Restore the titled landing screen and its original spacing.")
+        #expect(landingHeight == 430, "Keep the titled landing screen with the shared 22-point section gap.")
+        let landingTop = try #require(sections["top"])
         window.setContentSize(NSSize(width: 340, height: natural))
         state.windowHeight = natural
         try await Task.sleep(for: .milliseconds(150))
@@ -544,6 +593,14 @@ struct VisualTests {
         await store.waitUntilIdle()
         try await Task.sleep(for: .milliseconds(200))
         #expect(natural > landingHeight, "Recommendations must retain automatic content sizing.")
+        #expect(sections["top"] == landingTop, "Recommendations and inspirations must share the same player spacing.")
+        store.dismissRecommendation()
+        #expect(store.requestState == .idle, "Cancel must restore inspirations without waiting for the idle timer.")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(natural == landingHeight, "Cancel must restore the original landing height.")
+        #expect(sections["top"] == landingTop, "Cancel must not change the shared player spacing.")
+        #expect(abs((sections["body-landing"] ?? 0) - body) < 1,
+                "The inspirations must fill the body again, not leave an empty request-result area.")
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["VIBECAST_RENDER_UI"] == "1"))
@@ -557,7 +614,7 @@ struct VisualTests {
         await store.refreshPlayback()
         let state = PlayerPresentation()
         state.isDetached = true
-        let landingHeight: CGFloat = 418
+        let landingHeight: CGFloat = 430
         state.windowHeight = landingHeight
         var sections: [String: CGFloat] = [:]
         let host = NSHostingView(rootView: MenuBarRootView(store: store, presentation: state)

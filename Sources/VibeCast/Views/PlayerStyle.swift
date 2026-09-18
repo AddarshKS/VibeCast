@@ -1,5 +1,22 @@
 import SwiftUI
 
+struct InspirationButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(hovered ? Color.white : Color.primary)
+            // Apply one glow to the resolved label, not separate symbol layers.
+            .compositingGroup()
+            .shadow(color: .white.opacity(hovered ? 0.35 : 0), radius: 4)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
+            .onHover { hovered = $0 }
+    }
+}
+
 struct RaisedPlayerSurface: ViewModifier {
     var artworkURL: URL? = nil
     func body(content: Content) -> some View {

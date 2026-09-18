@@ -9,7 +9,7 @@ struct MiniplayerDetailsView: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 6) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(store.playback?.item?.name ?? "Nothing playing")
                         .font(.system(size: 14, weight: .semibold)).lineLimit(1)
@@ -26,8 +26,9 @@ struct MiniplayerDetailsView: View {
                 }
                 .measureRippleOrigin("mini-\(panel.rawValue)-exit")
                 PlayerWindowButton(detached: presentation.isDetached, action: toggleWindow)
+                    .measureRippleOrigin("mini-window")
             }
-            .padding(.horizontal, 12).padding(.top, presentation.isDetached ? 22 : 12)
+            .padding(.horizontal, 12).padding(.top, 12)
             .padding(.bottom, 3)
             .fixedSize(horizontal: false, vertical: true)
             .overlay(alignment: .bottom) { ReadingHeaderDivider().padding(.horizontal, 12).offset(y: 3) }
@@ -57,9 +58,6 @@ struct MiniplayerDetailsView: View {
         .background {
             ImmersiveArtworkView(url: store.playback?.item?.resolvedTrack.artworkURL,
                                  size: PlayerPresentation.width, reading: true, height: presentation.miniplayerDetailHeight)
-        }
-        .overlay(alignment: .top) {
-            if presentation.isDetached { PlayerWindowDragHandle().padding(.top, 2) }
         }
         .environment(\.colorScheme, .dark)
         .clipShape(RoundedRectangle(cornerRadius: 12))

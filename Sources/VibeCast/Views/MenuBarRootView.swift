@@ -54,6 +54,7 @@ struct MenuBarRootView: View {
         .coordinateSpace(name: "player")
         .modifier(DetachedPlayerSurface(enabled: presentation.isDetached))
         .tint(.teal)
+        .modifier(WindowFirstClick())
         .environment(\.playerDensity, density)
         .onPreferenceChange(RippleOrigins.self) { value in
             rippleOrigins.merge(value, uniquingKeysWith: { _, latest in latest })
@@ -99,7 +100,8 @@ struct MenuBarRootView: View {
                 if !advanced && store.authState.isLoggedIn {
                     NowPlayingView(store: store, panel: panelBinding, detached: presentation.isDetached,
                                    toggleWindow: toggleWindow, toggleMiniplayer: toggleMiniplayer)
-                        .padding(.horizontal, density.inset).padding(.bottom, density.value(14, 10))
+                        .padding(.horizontal, density.inset)
+                        .padding(.bottom, panel == nil ? density.landingSectionSpacing : density.value(14, 10))
                 }
             }
             .fixedSize(horizontal: false, vertical: true).measurePanelSection("top")
@@ -210,8 +212,9 @@ struct MenuBarRootView: View {
     }
 
     private var hasRequestStatus: Bool {
-        store.showsRequestProgress || store.latestError != nil || store.latestResult != nil ||
-            store.notificationNotice != nil || store.unfinishedPlaylist != nil
+        store.showsRequestProgress || store.latestError != nil ||
+            (store.latestResult.map { $0.source != .findPlaylist } ?? false) ||
+            store.notificationNotice != nil || (store.unfinishedPlaylist != nil && !store.isBusy)
     }
     private var topHeight: CGFloat { measurements["top"] ?? density.value(250, 220) }
     private var bottomHeight: CGFloat { presentation.showsComposer ? (measurements["bottom"].flatMap { $0 > 0 ? $0 : nil } ?? 60) : 0 }
@@ -258,14 +261,18 @@ struct MenuBarRootView: View {
                     store.submitPrompt()
                 } label: {
                     HStack {
-                        Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary)
+                        Image(systemName: icon)
+                            .symbolRenderingMode(.monochrome)
+                            .symbolEffectsRemoved()
+                            .foregroundStyle(Color.primary.opacity(0.55))
+                            .frame(width: 22)
                         Text(title)
                         Spacer()
                     }
                     .contentShape(Rectangle())
                     .padding(.vertical, density.value(5, 4))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(InspirationButtonStyle())
             }
         }
         .font(.system(size: 13))
