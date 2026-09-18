@@ -4,6 +4,63 @@ import Testing
 
 @MainActor
 struct PlayerFeedbackTests {
+    @Test(arguments: [false, true], [false, true])
+    func dismissRestoresSuggestionsImmediatelyAndPreservesDraftAndHistory(newDraft: Bool, deniedNotification: Bool) async throws {
+        let (store, api, planner, notifications, _) = try await StoreTests().fixture()
+        notifications.denied = deniedNotification
+        store.prompt = "find me a soft rock playlist"
+        store.submitPrompt()
+        await store.waitUntilIdle()
+        #expect(store.pendingPlaylistRecommendation != nil)
+        let historyCount = store.requestHistory.count
+        if newDraft { store.prompt = "something I am still typing" }
+        store.dismissRecommendation()
+        #expect(store.pendingPlaylistRecommendation == nil)
+        #expect(store.requestState == .idle)
+        #expect(store.latestResult == nil)
+        #expect(store.notificationNotice == nil)
+        #expect(store.prompt == (newDraft ? "something I am still typing" : ""))
+        #expect(store.requestHistory.count == historyCount)
+        #expect(api.actions.isEmpty)
+        #expect(planner.prompts.isEmpty)
+        store.dismissRecommendation()
+        #expect(store.requestState == .idle)
+    }
+
+    @Test(arguments: [false, true])
+    func dismissOldRecommendationKeepsNewRequestFeedback(stillRunning: Bool) async throws {
+        let (store, _, _, _, _) = try await StoreTests().fixture()
+        store.prompt = "find me a soft rock playlist"
+        store.submitPrompt()
+        await store.waitUntilIdle()
+        store.prompt = "hello"
+        store.submitPrompt()
+        if !stillRunning { await store.waitUntilIdle() }
+        let state = store.requestState
+        store.dismissRecommendation()
+        #expect(store.requestState == state)
+        await store.waitUntilIdle()
+        #expect(store.latestResult?.source == .conversation)
+        #expect(store.requestState != .idle)
+    }
+
+    @Test(arguments: [false, true])
+    func acceptingRecommendationKeepsFeedbackUntilIdleTimeout(magic: Bool) async throws {
+        let (store, _, _, _, _) = try await StoreTests().fixture()
+        store.prompt = "find me a soft rock playlist"
+        store.submitPrompt()
+        await store.waitUntilIdle()
+        let id = try #require(store.pendingPlaylistRecommendation?.id)
+        if magic { store.castMagic(from: id) }
+        else { store.acceptPlaylistRecommendation(id: id) }
+        await store.waitUntilIdle()
+        #expect(store.latestResult != nil)
+        #expect(store.requestState != .idle)
+        let completion = store.lastInteractionAt
+        #expect(!store.returnToSuggestionsIfIdle(at: completion.addingTimeInterval(59)))
+        #expect(store.returnToSuggestionsIfIdle(at: completion.addingTimeInterval(60)))
+    }
+
     @Test func readingPanelsKeepSameDefaultHeightAndFitTheScreen() {
         let state = PlayerPresentation()
         for panel in [PlayerPanel.lyrics, .queue] {

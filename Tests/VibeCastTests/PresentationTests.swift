@@ -217,9 +217,13 @@ struct PresentationTests {
         let statusClick = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: button.frame.origin,
             modifierFlags: [], timestamp: 2, windowNumber: statusWindow.windowNumber, context: nil,
             eventNumber: 2, clickCount: 1, pressure: 1))
-        #expect(controller.handlePopoverEvent(statusClick) === statusClick)
-        #expect(controller.popover.isShown, "The local monitor must leave the icon toggle to the button.")
-        #expect(button.sendAction(button.action, to: button.target))
+        if controller.expandedSession != nil {
+            #expect(controller.handlePopoverEvent(statusClick) == nil)
+        } else {
+            #expect(controller.handlePopoverEvent(statusClick) === statusClick)
+            #expect(controller.popover.isShown, "The legacy button still owns its toggle.")
+            #expect(button.sendAction(button.action, to: button.target))
+        }
         #expect(!controller.popover.isShown)
         #expect(!controller.isMonitoringPopoverDismissal)
         #expect(controller.anchorWindow?.isVisible == false)

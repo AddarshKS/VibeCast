@@ -396,11 +396,15 @@ final class VibeCastStore: ObservableObject {
               latestError == nil, notificationNotice == nil,
               pendingPlaylistRecommendation == nil, unfinishedPlaylist == nil,
               prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || prompt == lastSubmittedPrompt else { return false }
+        restoreSuggestions()
+        return true
+    }
+
+    private func restoreSuggestions() {
         latestResult = nil
         requestState = .idle
         if prompt == lastSubmittedPrompt { prompt = "" }
         lastSubmittedPrompt = nil
-        return true
     }
 
     func refreshPlayback() async {
@@ -478,6 +482,12 @@ final class VibeCastStore: ObservableObject {
         pending.removeAll { $0.id == item.id }
         notifications.remove(item.id)
         persistPending()
+        // Dismissing an old card must not erase a newer reply or interrupt work.
+        if !isBusy, latestError == nil, latestResult?.source == .findPlaylist,
+           latestResult?.playlist?.uri == item.playlist.uri {
+            notificationNotice = nil
+            restoreSuggestions()
+        }
     }
 
     func finishPlaylist() {

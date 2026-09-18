@@ -12,6 +12,7 @@ enum PlayerDensity: Hashable {
     var inset: CGFloat { value(20, 14) }
     var buttonSize: CGFloat { value(30, 28) }
     var detailSpacing: CGFloat { value(14, 10) }
+    var landingSectionSpacing: CGFloat { value(30, 22) }
     var bodyBottom: CGFloat { value(12, 8) }
     var lyricsFont: CGFloat { value(22, 18) }
 }

@@ -22,16 +22,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private weak var statusMenu: NSMenu?
     private var adjustingWindow = false
     private var lastPopoverAnchor: NSRect?
+    private var popoverSessionID: UUID?
     private var outsideClickMonitor: Any?
     private var popoverEventMonitor: Any?
     private var deactivateObserver: NSObjectProtocol?
     private var settingsActivationObserver: NSObjectProtocol?
     private var settingsNeedsActivation = false
     private var spaceChangeObserver: NSObjectProtocol?
+    private var workspaceActivationObserver: NSObjectProtocol?
+    private(set) var expandedSession: StatusItemExpandedSession?
 
     var isMonitoringPopoverDismissal: Bool { popoverEventMonitor != nil && outsideClickMonitor != nil }
 
-    init(store: VibeCastStore) {
+    init(store: VibeCastStore, usesNativeStatusTracking: Bool = true) {
         self.store = store
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -40,9 +43,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             button.imagePosition = .imageOnly
             button.toolTip = "VibeCast"
             button.setAccessibilityLabel("VibeCast")
-            button.target = self
-            button.action = #selector(statusItemClicked)
-            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
         // The stable fullscreen anchor is not the status button. Own dismissal
         // so AppKit cannot close on mouse-down and reopen on the button action.
@@ -62,6 +62,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.contentSize = NSSize(width: PlayerPresentation.width, height: playerHeight)
         playerPresentation.windowHeight = popover.contentSize.height
         interactionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
+            if let self, self.isStatusItemClick(event) {
+                StatusItemExpandedSession.log.debug("local event=\(event.type.rawValue) time=\(event.timestamp) shown=\(self.popover.isShown)")
+            }
+            if let self, self.expandedSession != nil, self.isStatusItemClick(event),
+               event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
+                self.showStatusMenu()
+                return nil
+            }
             if let self, let window = self.hosting.view.window,
                (self.popover.isShown || self.playerPresentation.isDetached), event.window === window {
                 self.store.noteInteraction()
@@ -77,6 +85,36 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         subscriptionObserver = store.chatGPT.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { [weak self] in self?.updateSubscriptionMenuItem() }
         }
+        if usesNativeStatusTracking { installExpandedInterfaceSession() }
+        if expandedSession == nil {
+            statusItem.button?.target = self
+            statusItem.button?.action = #selector(statusItemClicked)
+            statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        }
+    }
+
+    private func installExpandedInterfaceSession() {
+        let session = StatusItemExpandedSession()
+        session.onBegin = { [weak self] in
+            guard let self else { return }
+            if let event = NSApp.currentEvent,
+               event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
+                self.showStatusMenu()
+                return
+            }
+            if self.playerPresentation.isDetached {
+                self.expandedSession?.cancel()
+                self.bringPlayerForward()
+            } else {
+                self.togglePopover()
+                if !self.popover.isShown { self.expandedSession?.cancel() }
+            }
+        }
+        session.onEnd = { [weak self] in self?.popover.performClose(nil) }
+        guard session.install(on: statusItem) else { return }
+        // AppKit owns opening/menu tracking; our monitors handle repeated clicks.
+        // Assigning a menu disables expanded sessions, so contextual clicks stay separate.
+        expandedSession = session
     }
 
     private func resizePopover(_ height: CGFloat) {
@@ -122,6 +160,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     // Anchor to a snapshot of the click position, not that moving system window.
     func showPopover(anchoredAt rect: NSRect) {
         guard !playerPresentation.isDetached else { return }
+        popoverSessionID = UUID()
         lastPopoverAnchor = rect
         let screen = NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.main
         updateMaximumHeight(on: screen)
@@ -141,12 +180,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         anchor.setFrame(rect, display: false)
         anchor.orderFrontRegardless()
         popover.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+        // The native popover is a nonactivating panel. Controls can receive the
+        // first click without activating VibeCast; text editing can still take key focus.
+        if let panel = hosting.view.window as? NSPanel {
+            panel.becomesKeyOnlyIfNeeded = true
+            panel.acceptsMouseMovedEvents = true
+        }
         if popover.isShown { startPopoverDismissalMonitoring() }
     }
 
     func popoverDidClose(_ notification: Notification) {
+        popoverSessionID = nil
         stopPopoverDismissalMonitoring()
         anchorWindow?.orderOut(nil)
+        expandedSession?.cancel()
     }
 
     private func startPopoverDismissalMonitoring() {
@@ -156,18 +203,31 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             guard let self else { return event }
             return self.handlePopoverEvent(event)
         }
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
-            self?.dismissPopoverForExternalInteraction()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] event in
+            self?.handleGlobalPopoverClick(event)
         }
         deactivateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dismissPopoverForExternalInteraction() }
+            MainActor.assumeIsolated { self?.handleApplicationDeactivation() }
         }
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.dismissPopoverForExternalInteraction() }
+        }
+        // A nonactivating dropdown cannot rely on our app resigning active
+        // when the user switches from one other application to another.
+        let originalApplicationPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+                  app.processIdentifier != originalApplicationPID else { return }
+            MainActor.assumeIsolated {
+                self?.dismissPopoverForExternalInteraction()
+            }
         }
     }
 
@@ -180,10 +240,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             }
             return event
         }
-        // The status button owns its toggle. Never close here and then deliver
-        // the same click to a button that would reopen the popover.
-        if [.leftMouseDown, .rightMouseDown].contains(event.type), let buttonWindow = statusItem.button?.window,
-           event.window === buttonWindow { return event }
+        if isStatusItemClick(event) {
+            // Native tracking does not necessarily end on a repeated icon click.
+            // Consume local dismissal so this same event cannot open it again.
+            return closeExpandedPopoverForStatusClick(event) ? nil : event
+        }
         let contentWindow = popover.contentViewController?.view.window
         var target = event.window
         while let window = target {
@@ -192,6 +253,55 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         dismissPopoverForExternalInteraction()
         return event
+    }
+
+    private var statusButtonScreenRect: NSRect? {
+        if let button = statusItem.button, let window = button.window {
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            if NSScreen.screens.contains(where: { $0.frame.intersects(rect) }) { return rect }
+        }
+        // The fullscreen menu bar can hide its native status window while the
+        // popover remains anchored to the last visible icon location.
+        return popover.isShown ? lastPopoverAnchor : nil
+    }
+
+    private func isStatusItemClick(_ event: NSEvent) -> Bool {
+        guard event.type == .leftMouseDown || event.type == .rightMouseDown else { return false }
+        if let window = statusItem.button?.window, event.window === window { return true }
+        // Forwarded status clicks may have no window or a different native window.
+        let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
+        return statusButtonScreenRect?.contains(point) == true
+    }
+
+    func handleGlobalPopoverClick(_ event: NSEvent) {
+        if isStatusItemClick(event) {
+            StatusItemExpandedSession.log.debug("global event=\(event.type.rawValue) time=\(event.timestamp) shown=\(self.popover.isShown)")
+            _ = closeExpandedPopoverForStatusClick(event)
+            return
+        }
+        dismissPopoverForExternalInteraction()
+    }
+
+    // The caller has hit-tested the status item. Legacy target/action still owns
+    // its toggle; right/Control-click still belongs to the contextual menu.
+    private func closeExpandedPopoverForStatusClick(_ event: NSEvent) -> Bool {
+        guard expandedSession != nil, popover.isShown, !playerPresentation.isDetached,
+              event.type == .leftMouseDown, !event.modifierFlags.contains(.control) else { return false }
+        StatusItemExpandedSession.log.notice("Closing dropdown from repeated status-icon click")
+        popover.performClose(nil) // popoverDidClose cancels native menu tracking.
+        return true
+    }
+
+    func handleApplicationDeactivation(mouseLocation: NSPoint = NSEvent.mouseLocation,
+                                       pressedMouseButtons: Int = NSEvent.pressedMouseButtons) {
+        guard popover.isShown, !playerPresentation.isDetached, let sessionID = popoverSessionID else { return }
+        // Status-item tracking can resign activation before delivering its action.
+        // That physical click belongs to the button, not the outside-click closer.
+        if pressedMouseButtons & 0b11 != 0, statusButtonScreenRect?.contains(mouseLocation) == true { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.popoverSessionID == sessionID else { return }
+            self.dismissPopoverForExternalInteraction()
+        }
     }
 
     func dismissPopoverForExternalInteraction() {
@@ -204,10 +314,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         if let deactivateObserver { NotificationCenter.default.removeObserver(deactivateObserver) }
         if let spaceChangeObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceChangeObserver) }
+        if let workspaceActivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceActivationObserver) }
         popoverEventMonitor = nil
         outsideClickMonitor = nil
         deactivateObserver = nil
         spaceChangeObserver = nil
+        workspaceActivationObserver = nil
     }
 
     @objc func togglePopover() {
@@ -218,21 +330,24 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         guard NSScreen.screens.contains(where: { $0.frame.intersects(anchor) }) else { return }
         store.returnToSuggestionsIfIdle()
         store.noteInteraction()
-        NSApp.activate(ignoringOtherApps: true)
         showPopover(anchoredAt: anchor)
-        popover.contentViewController?.view.window?.makeKey()
     }
 
     @objc private func statusItemClicked() {
         if let event = NSApp.currentEvent,
            event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
-            guard let button = statusItem.button, let window = button.window else { return }
-            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-            popover.performClose(nil)
-            button.highlight(true)
-            defer { button.highlight(false) }
-            makeStatusMenu().popUp(positioning: nil, at: Self.statusMenuOrigin(below: anchor), in: nil)
+            showStatusMenu()
         } else { togglePopover() }
+    }
+
+    private func showStatusMenu() {
+        guard let button = statusItem.button, let window = button.window else { return }
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        popover.performClose(nil)
+        expandedSession?.cancel()
+        button.highlight(true)
+        defer { button.highlight(false) }
+        makeStatusMenu().popUp(positioning: nil, at: Self.statusMenuOrigin(below: anchor), in: nil)
     }
 
     // Screen coordinates avoid the status button's flipped local coordinate system.
@@ -319,7 +434,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             window.backgroundColor = .clear
             window.hasShadow = true
             window.level = .normal
-            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            // Keep the player on its own Space. Activation should visit that
+            // window, not carry it onto the user's current desktop/fullscreen app.
+            window.collectionBehavior = [.managed, .participatesInCycle]
             window.onClose = { [weak self] in self?.returnToMenuBar() }
             window.delegate = self
             playerWindow = window
@@ -363,17 +480,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             NSScreen.screens.contains { $0.frame.intersects(rect) }
         }
         if let anchor {
-            NSApp.activate(ignoringOtherApps: true)
             showPopover(anchoredAt: anchor)
-            popover.contentViewController?.view.window?.makeKey()
         }
     }
 
     private func bringPlayerForward() {
         guard let window = playerWindow else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
-        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         store.noteInteraction()
     }
 
@@ -474,6 +589,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     }
 
     func close() {
+        expandedSession?.uninstall()
+        expandedSession = nil
+        popoverSessionID = nil
         stopPopoverDismissalMonitoring()
         subscriptionObserver = nil
         if let settingsActivationObserver { NotificationCenter.default.removeObserver(settingsActivationObserver) }

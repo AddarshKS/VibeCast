@@ -56,7 +56,9 @@ struct PlaybackSeekBar: View {
                     .onHover { hovered = $0 }
                 }
                 .frame(height: 16)
-                .focusable(canSeek)
+                // Editing focus is automatically assigned when a popover becomes
+                // key. Opt into deliberate keyboard navigation, like the buttons.
+                .focusable(canSeek, interactions: .activate)
                 // The track glow already indicates focus; avoid a second rectangular focus ring.
                 .focusEffectDisabled()
                 .focused($focused)
@@ -86,7 +88,7 @@ struct PlaybackSeekBar: View {
         }
         .onChange(of: store.playback?.item?.uri) { _, _ in if scrub != nil { cancelled = true } }
         .onChange(of: store.isBusy) { _, busy in if busy && scrub != nil { cancelled = true } }
-        .onDisappear { scrub = nil; cancelled = false }
+        .onDisappear { scrub = nil; cancelled = false; hovered = false; focused = false }
     }
 
     private func displayedPosition(at date: Date) -> Int {
