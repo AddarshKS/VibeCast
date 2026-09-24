@@ -6,7 +6,7 @@ enum AppConfig {
     static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
     static let spotifyRedirectURI = "http://127.0.0.1:43821/callback"
     static let spotifyScopes = [
-        "user-read-playback-state", "user-modify-playback-state", "playlist-modify-private"
+        "user-read-playback-state", "user-modify-playback-state", "playlist-modify-private", "playlist-read-private"
     ]
     static let maximumPromptLength = 600
     static let recommendationLifetime: TimeInterval = 3_600

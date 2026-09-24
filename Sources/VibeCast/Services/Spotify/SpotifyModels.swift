@@ -71,6 +71,12 @@ struct SpotifyPlaylist: Decodable {
     let description: String?
     let owner: SpotifyPlaylistOwner?
     let images: [SpotifyImage]?
+    var isPublic: Bool? = nil
+    var snapshotID: String? = nil
+    enum CodingKeys: String, CodingKey {
+        case id, uri, name, description, owner, images
+        case isPublic = "public", snapshotID = "snapshot_id"
+    }
     var resolvedPlaylist: SpotifyResolvedPlaylist {
         SpotifyResolvedPlaylist(uri: uri, name: name, ownerName: owner?.displayName,
                                 description: description, artworkURL: images?.first?.url)
@@ -78,7 +84,43 @@ struct SpotifyPlaylist: Decodable {
 }
 struct SpotifyPlaylistOwner: Decodable {
     let displayName: String?
-    enum CodingKeys: String, CodingKey { case displayName = "display_name" }
+    var id: String? = nil
+    enum CodingKeys: String, CodingKey { case displayName = "display_name", id }
+}
+
+struct SpotifyOwnedPlaylistPage: Decodable {
+    let items: [SpotifyPlaylist?]
+    let next: String?
+    let offset: Int
+    let total: Int
+}
+
+struct SpotifyPlaylistItemsPage: Decodable {
+    let items: [Entry?]
+    let next: String?
+    let offset: Int
+    let total: Int
+
+    struct Entry: Decodable {
+        let item: Item?
+        enum CodingKeys: String, CodingKey { case item, track }
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            // A present but null modern item must not resurrect a stale legacy track.
+            if values.contains(.item) {
+                item = try values.decodeIfPresent(Item.self, forKey: .item)
+            } else {
+                item = try values.decodeIfPresent(Item.self, forKey: .track)
+            }
+        }
+    }
+    struct Item: Decodable {
+        let uri: String
+        let linkedFrom: LinkedTrack?
+        enum CodingKeys: String, CodingKey { case uri, linkedFrom = "linked_from" }
+        struct LinkedTrack: Decodable { let uri: String? }
+        var requestedURI: String { linkedFrom?.uri ?? uri }
+    }
 }
 struct SpotifyDevicesResponse: Decodable { let devices: [SpotifyDevice] }
 struct SpotifyDevice: Decodable, Equatable {

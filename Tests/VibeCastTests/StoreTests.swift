@@ -17,8 +17,20 @@ final class FakeSpotify: SpotifyServing {
     var holdProfile = false
     var profileError: (any Error)?
     var profileReads = 0
+    var profileValue = SpotifyUserProfile(id: "alice", displayName: "Alice")
     var profileReply: CheckedContinuation<SpotifyUserProfile, Never>?
     var holdCreation = false
+    var creationError: (any Error)?
+    var creationDescriptions: [String] = []
+    var onCreate: (() -> Void)?
+    var recoveryValue: SpotifyResolvedPlaylist?
+    var recoveryError: (any Error)?
+    var recoveryReads = 0
+    var verificationError: (any Error)?
+    var verificationReads = 0
+    var writtenTracks: [SpotifyResolvedTrack] = []
+    var holdWrite = false
+    var writeReply: CheckedContinuation<Void, Never>?
     var creationReply: CheckedContinuation<SpotifyResolvedPlaylist, Never>?
     let found = SpotifyResolvedPlaylist(uri: "spotify:playlist:found", name: "Soft Rock", ownerName: "Spotify", description: nil)
     func profile() async throws -> SpotifyUserProfile {
@@ -29,7 +41,7 @@ final class FakeSpotify: SpotifyServing {
             if let profileError { throw profileError }
             return profile
         }
-        return SpotifyUserProfile(id: "alice", displayName: "Alice")
+        return profileValue
     }
     var playbackValue: SpotifyPlayback?
     var applyControls = true
@@ -125,20 +137,40 @@ final class FakeSpotify: SpotifyServing {
     }
     func createPlaylist(name: String, description: String) async throws -> SpotifyResolvedPlaylist {
         creations += 1
+        creationDescriptions.append(description)
+        onCreate?()
+        if let creationError { throw creationError }
         if holdCreation { return await withCheckedContinuation { creationReply = $0 } }
         return found
     }
     func setPlaylistTracks(_ playlist: SpotifyResolvedPlaylist, tracks: [SpotifyResolvedTrack]) async throws {
         writes += 1
+        writtenTracks = tracks
+        if holdWrite { await withCheckedContinuation { writeReply = $0 } }
         if failWrite { throw UserFacingError("Connection interrupted") }
+    }
+    func findCreatedPlaylist(for attempt: PlaylistCreationAttempt) async throws -> SpotifyResolvedPlaylist? {
+        recoveryReads += 1
+        if let recoveryError { throw recoveryError }
+        return recoveryValue
+    }
+    func verifyPlaylist(_ playlist: SpotifyResolvedPlaylist, tracks: [SpotifyResolvedTrack], accountID: String) async throws {
+        verificationReads += 1
+        if let verificationError { throw verificationError }
+        guard writtenTracks == tracks else { throw PlaylistRecoveryError.verificationFailed }
     }
 }
 
 @MainActor
 final class FakePlanner: PlaylistPlanning {
     var prompts: [String] = []
+    var error: (any Error)?
+    var hold = false
+    var reply: CheckedContinuation<Void, Never>?
     func plan(for prompt: String) async throws -> PlaylistPlan {
         prompts.append(prompt)
+        if hold { await withCheckedContinuation { reply = $0 } }
+        if let error { throw error }
         return PlaylistPlan(name: "Test Mix", description: "An evening", tracks: (1...12).map {
             TrackIntent(title: "Song \($0)", artist: "Artist")
         })
@@ -148,25 +180,29 @@ final class FakePlanner: PlaylistPlanning {
 @MainActor
 final class FakeNotifications: Notifying {
     var delivered: [UUID] = []
+    var removed: [UUID] = []
     var denied = false
+    var hold = false
+    var reply: CheckedContinuation<Void, Never>?
     func recommend(_ recommendation: PendingPlaylistRecommendation) async throws {
+        if hold { await withCheckedContinuation { reply = $0 } }
         if denied { throw UserFacingError("Notifications disabled") }
         delivered.append(recommendation.id)
     }
-    func remove(_ id: UUID) {}
-    func clear() {}
+    func remove(_ id: UUID) { removed.append(id); delivered.removeAll { $0 == id } }
+    func clear() { delivered = [] }
 }
 
 @MainActor
 final class StoreTests {
     func fixture(defaults: UserDefaults? = nil, api: FakeSpotify? = nil, lyrics: any LyricsServing = FixedLyrics(),
-                 accountRetryDelay: TimeInterval = 30) async throws
+                 accountRetryDelay: TimeInterval = 30, scopes: String = "playlist-modify-private playlist-read-private") async throws
         -> (VibeCastStore, FakeSpotify, FakePlanner, FakeNotifications, UserDefaults) {
         let defaults = defaults ?? UserDefaults(suiteName: UUID().uuidString)!
         let settings = AppSettings(defaults: defaults)
         settings.aiConsent = true
         let secrets = MemorySecrets()
-        let token = SpotifyToken(accessToken: "fake", refreshToken: "fake", scope: "playlist-modify-private", expiresAt: .distantFuture)
+        let token = SpotifyToken(accessToken: "fake", refreshToken: "fake", scope: scopes, expiresAt: .distantFuture)
         try secrets.write(JSONEncoder().encode(token), account: "spotify..")
         let api = api ?? FakeSpotify()
         let planner = FakePlanner()
@@ -291,19 +327,19 @@ final class StoreTests {
         #expect(store.authState == .loggedOut)
     }
 
-    @Test func testExpiredRecoveryDataIsRemovedOnStartup() async throws {
+    @Test func testExpiredRecommendationsAreRemovedButPlaylistRecoverySurvives() async throws {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let api = FakeSpotify()
         var recommendation = PendingPlaylistRecommendation(accountID: "alice", originalPrompt: "drive",
                                                            playlist: api.found, searchPhrase: "drive")
         recommendation.createdAt = Date().addingTimeInterval(-3601)
         RecommendationStore(defaults: defaults).save([recommendation])
-        var draft = PlaylistDraft(accountID: "alice", playlist: api.found, tracks: [])
+        var draft = PlaylistDraft(accountID: "alice", playlist: api.found,
+                                  tracks: [.init(uri: "spotify:track:0000000000000000000001", title: "Song", artist: "Artist")])
         draft.createdAt = Date().addingTimeInterval(-86401)
         defaults.set(try JSONEncoder().encode(draft), forKey: "unfinishedPlaylist")
-        let store = VibeCastStore(secrets: MemorySecrets(), spotify: api, planner: FakePlanner(),
-                                 notifications: FakeNotifications(), defaults: defaults, startAutomatically: false)
-        #expect(store.unfinishedPlaylist == nil)
+        let (store, _, _, _, _) = try await fixture(defaults: defaults, api: api)
+        #expect(store.unfinishedPlaylist == draft)
         #expect(defaults.data(forKey: "unfinishedPlaylist") == nil)
         #expect(defaults.data(forKey: "pendingRecommendations.v2") == nil)
     }
