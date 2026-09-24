@@ -98,11 +98,16 @@ struct SpotifyPlayback: Decodable {
     let repeatState: String
     var progressMS: Int? = nil
     var actions: Actions? = nil
+    var context: Context? = nil
     struct Actions: Decodable { let disallows: [String: Bool]? }
+    struct Context: Decodable, Equatable {
+        let type: String
+        let uri: String
+    }
     enum CodingKeys: String, CodingKey {
         case isPlaying = "is_playing", item, device, shuffleState = "shuffle_state", repeatState = "repeat_state"
         case progressMS = "progress_ms"
-        case actions
+        case actions, context
     }
 
     func elapsedMS(observedAt: Date, now: Date) -> Int {
@@ -121,6 +126,7 @@ extension SpotifyPlayback {
         repeatState = try values.decode(String.self, forKey: .repeatState)
         progressMS = try values.decodeIfPresent(Int.self, forKey: .progressMS)
         actions = try values.decodeIfPresent(Actions.self, forKey: .actions)
+        context = try values.decodeIfPresent(Context.self, forKey: .context)
         // Episodes and ads must clear the old song, not leave stale artwork/lyrics onscreen.
         item = try? values.decodeIfPresent(SpotifyTrack.self, forKey: .item)
     }

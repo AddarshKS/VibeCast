@@ -52,6 +52,15 @@ extension SpotifyServing {
     func execute(_ action: SpotifyAction) async throws -> VibeCastResult {
         try await execute(action, deviceID: nil)
     }
+
+    func resolveTrack(_ query: TrackQuery) async throws -> SpotifyResolvedTrack {
+        let candidates = try await searchTrackCandidates(query: "track:\"\(query.title)\" artist:\"\(query.artist ?? "")\"", limit: 8)
+        try Task.checkCancellation()
+        guard let track = MusicSearch.matchTrack(title: query.title, artist: query.artist, candidates: candidates) else {
+            throw SpotifyAPIError.missingTrack
+        }
+        return track
+    }
 }
 
 @MainActor
@@ -106,10 +115,7 @@ final class SpotifyAPIClient: SpotifyServing {
         case .repeatMode(let mode):
             try await send(method: "PUT", path: "/me/player/repeat", query: (target ?? [:]).merging(["state": mode.rawValue]) { _, new in new })
         case .playTrack(let query), .queueTrack(let query):
-            let candidates = try await searchTrackCandidates(query: "track:\"\(query.title)\" artist:\"\(query.artist ?? "")\"", limit: 8)
-            guard let track = MusicSearch.matchTrack(title: query.title, artist: query.artist, candidates: candidates) else {
-                throw SpotifyAPIError.missingTrack
-            }
+            let track = try await resolveTrack(query)
             return try await execute(action.isQueue ? .queueResolvedTrack(track) : .playResolvedTrack(track), deviceID: deviceID)
         case .playResolvedTrack(let track):
             try await send(method: "PUT", path: "/me/player/play", query: deviceQuery(preferred: target), body: ["uris": [track.uri]])
@@ -131,7 +137,8 @@ final class SpotifyAPIClient: SpotifyServing {
         case .transferPlayback(let name):
             let devices: SpotifyDevicesResponse = try await request(path: "/me/player/devices")
             guard let device = devices.devices.first(where: {
-                $0.id != nil && $0.isRestricted != true && $0.name.localizedCaseInsensitiveContains(name)
+                $0.id != nil && $0.isRestricted != true &&
+                    (deviceID == nil ? $0.name.localizedCaseInsensitiveContains(name) : $0.id == deviceID)
             }), let id = device.id else { throw SpotifyAPIError.missingDevice }
             try await send(method: "PUT", path: "/me/player", body: ["device_ids": [id], "play": true])
             resolved = device.name

@@ -12,6 +12,8 @@ final class FakeSpotify: SpotifyServing {
     var noTracks = false
     var searchDelay = false
     var failAction = false
+    var actionError: (any Error)?
+    var onExecute: ((SpotifyAction) -> Void)?
     var holdProfile = false
     var profileError: (any Error)?
     var profileReads = 0
@@ -35,16 +37,18 @@ final class FakeSpotify: SpotifyServing {
     var holdPlayback = false
     var playbackReply: CheckedContinuation<SpotifyPlayback?, Never>?
     var playbackReads = 0
+    var playbackError: (any Error)?
     var queueValue: [SpotifyQueueItem] = []
     var queueReads = 0
     var previousItems: [SpotifyTrack] = []
-    var deviceValues: [SpotifyDevice] = []
+    var deviceValues = [SpotifyDevice(id: "mac", name: "Mac", isActive: true, isRestricted: false)]
     func devices() async throws -> [SpotifyDevice] { deviceValues }
     var queueFailure = false
     var holdQueue = false
     var queueReply: CheckedContinuation<[SpotifyQueueItem], Never>?
     func playback() async throws -> SpotifyPlayback? {
         playbackReads += 1
+        if let playbackError { throw playbackError }
         if holdPlayback { return await withCheckedContinuation { playbackReply = $0 } }
         if !playbackResponses.isEmpty { return playbackResponses.removeFirst() }
         return playbackValue
@@ -58,6 +62,7 @@ final class FakeSpotify: SpotifyServing {
     func execute(_ action: SpotifyAction, deviceID: String? = nil) async throws -> VibeCastResult {
         actions.append(action)
         actionDeviceIDs.append(deviceID)
+        if let actionError { throw actionError }
         if failAction { throw UserFacingError("Spotify control failed") }
         if applyControls {
             let old = playbackValue
@@ -65,7 +70,8 @@ final class FakeSpotify: SpotifyServing {
             var shuffle = old?.shuffleState ?? false
             var repeatMode = old?.repeatState ?? "off"
             var item = old?.item
-            var device = old?.device
+            var device = deviceID.flatMap { id in deviceValues.first { $0.id == id } } ?? old?.device
+            var context = old?.context
             var position = 0
             switch action {
             case .shuffle(let value): shuffle = value
@@ -76,7 +82,13 @@ final class FakeSpotify: SpotifyServing {
                 item = SpotifyTrack(uri: "spotify:track:step\(actions.count)", name: "Next", artists: [], album: nil, isPlayable: true)
             case .playResolvedTrack(let track):
                 playing = true
+                context = nil
                 item = SpotifyTrack(uri: track.uri, name: track.title, artists: [SpotifyArtist(name: track.artist)], album: nil, isPlayable: true)
+            case .playResolvedPlaylist(let playlist):
+                playing = true
+                context = .init(type: "playlist", uri: playlist.uri)
+            case .transferPlayback:
+                playing = true
             case .transferToDevice(let value): device = value
             case .seek(let value, _): position = value
             case .advanceQueue:
@@ -89,15 +101,24 @@ final class FakeSpotify: SpotifyServing {
             default: break
             }
             playbackValue = SpotifyPlayback(isPlaying: playing, item: item, device: device,
-                                            shuffleState: shuffle, repeatState: repeatMode, progressMS: position)
+                                            shuffleState: shuffle, repeatState: repeatMode, progressMS: position, context: context)
         }
-        return VibeCastResult(title: "Playing", source: .spotifyAPI)
+        onExecute?(action)
+        var result = VibeCastResult(title: action.notificationTitle, source: .spotifyAPI)
+        if case .playResolvedTrack(let track) = action { result.resolvedItem = track.displayName }
+        if case .playResolvedPlaylist(let playlist) = action { result.resolvedItem = playlist.name; result.playlist = playlist }
+        return result
     }
+    var playlistCandidates: [SpotifyResolvedPlaylist]?
     func searchPlaylistCandidates(query: String, limit: Int) async throws -> [SpotifyResolvedPlaylist] {
         if searchDelay { try await Task.sleep(for: .seconds(2)) }
-        return [found]
+        return playlistCandidates ?? [found]
     }
+    var trackCandidates: [SpotifyResolvedTrack]?
+    var trackQueries: [String] = []
     func searchTrackCandidates(query: String, limit: Int) async throws -> [SpotifyResolvedTrack] {
+        trackQueries.append(query)
+        if let trackCandidates { return trackCandidates }
         if noTracks { return [] }
         guard let i = (1...12).first(where: { query == TrackIntent(title: "Song \($0)", artist: "Artist").searchQuery }) else { return [] }
         return [SpotifyResolvedTrack(uri: "spotify:track:" + String(format: "%022d", i), title: "Song \(i)", artist: "Artist")]

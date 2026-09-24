@@ -2,7 +2,17 @@
 
 UI freeze: the owner approved the compact player on `codex/compact-dropdown-experiment`, originally stacked on `codex/public-beta` (PR #1). The player-reliability integration carries that UI checkpoint forward without redesigning it. Preserve the approved UI while completing review and request readiness; further UI changes need an explicit request. See [compact player scope and verification](COMPACT_DROPDOWN_EXPERIMENT.md).
 
-Updated September 18, 2026. Start the next request-focused task with [the request handoff](REQUEST_HANDOFF.md).
+Updated September 23, 2026. Start request-focused work with [the approved baseline handoff](REQUEST_HANDOFF.md) and the milestone below.
+
+## Request Playback Milestone
+
+September 23, 2026, on `codex/request-playback-confirmation` from `main` at `2d92c0f`: typed playback requests, resolved songs, and Sure now verify the resulting Spotify state before reporting success. Sure checks the recommended playlist context and selected device through both inline and notification actions. Confirmation reads are bounded and do not resend commands. Uncertain outcomes keep the recommendation consumed to prevent replay; definite rejections permit an explicit retry. Fresh baselines, device binding, and polling/cancellation guards preserve request ownership. Existing Adv surfaces show the execution stage and safe failure evidence.
+
+The approved player UI, native presentation, queue navigation, quiet button feedback, and protected cleanup policy are unchanged. See [the request playback acceptance matrix](REQUEST_PLAYBACK_ACCEPTANCE.md) for scope and remaining live checks. Live owner acceptance and playlist-creation quality remain pending.
+
+Verification: routing checks passed all four cases; focused request/service/feedback checks passed 70 tests across six suites; the full Swift run passed 201 tests across 20 suites with rendering enabled; the optional service passed all nine tests. The separate native presentation suite passed all 26 tests on its third unchanged run. Its first run had 13 visibility/toggle assertions across two tests; its second had 192 cascading visibility/anchor assertions in a different test. The three affected cases also passed on untouched `main` in a temporary checkout. These intermittent native failures are retained here rather than described as a clean first pass. No presentation implementation was modified to make the tests pass. Live Spotify playback and subscription generation were not exercised.
+
+The development bundle was packaged, installed at `/Applications/VibeCast.app`, and verified running with `./script/build_and_run.sh --verify`. This is ready for the owner's live playback acceptance pass; it is not a public-release or live-playlist-quality sign-off.
 
 ## Post-Freeze Reliability Pass
 

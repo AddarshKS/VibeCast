@@ -22,6 +22,8 @@ final class VibeCastStore: ObservableObject {
     private var operationID = UUID()
     private var accountGeneration = UUID()
     private var playbackRefreshID = UUID()
+    // Request feedback remains visible while this suppresses competing player polls.
+    private var isRequestPlayback = false
     private let controlConfirmationDelay: Duration
     private let accountRetryDelay: TimeInterval
     private var accountRestoreID: UUID?
@@ -240,6 +242,7 @@ final class VibeCastStore: ObservableObject {
         work = nil
         isBusy = false
         isPlayerControl = false
+        isRequestPlayback = false
         pendingPlayerAction = nil
         pendingQueueIndex = nil
         pendingHistoryIndex = nil
@@ -355,7 +358,8 @@ final class VibeCastStore: ObservableObject {
     }
 
     private func confirmPlayback(_ action: SpotifyAction, before: SpotifyPlayback?,
-                                 commandStartedAt: ContinuousClock.Instant, baselineAge: TimeInterval = 0) async throws {
+                                 commandStartedAt: ContinuousClock.Instant, baselineAge: TimeInterval = 0,
+                                 expectedDeviceID: String? = nil) async throws {
         let generation = accountGeneration
         var latest: SpotifyPlayback?
         for attempt in 0..<6 {
@@ -365,7 +369,11 @@ final class VibeCastStore: ObservableObject {
             do { latest = try await spotify.playback() }
             catch {
                 try Task.checkCancellation()
-                throw UserFacingError("The command was sent, but Spotify's player couldn't be checked. Check Spotify before trying again.")
+                if isRequestPlayback {
+                    diagnostics.record("Playback", "Confirmation read failed: \(Self.playbackErrorSummary(error))", isError: true)
+                    playbackRefreshFailed = true
+                }
+                throw PlaybackConfirmationFailure.unavailable
             }
             try Task.checkCancellation()
             guard accountGeneration == generation else { throw CancellationError() }
@@ -374,7 +382,8 @@ final class VibeCastStore: ObservableObject {
             if PlaybackConfirmation.matches(action, before: before, after: latest,
                                             elapsedSinceCommand: Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18,
                                             baselineAge: baselineAge,
-                                            elapsedBeforeRead: Double(beforeRead.seconds) + Double(beforeRead.attoseconds) / 1e18) {
+                                            elapsedBeforeRead: Double(beforeRead.seconds) + Double(beforeRead.attoseconds) / 1e18,
+                                            expectedDeviceID: expectedDeviceID) {
                 playbackUpdatedAt = Date()
                 playbackRefreshFailed = false
                 playback = latest
@@ -384,7 +393,8 @@ final class VibeCastStore: ObservableObject {
         }
         playbackUpdatedAt = Date()
         playback = latest
-        throw UserFacingError("Spotify hasn't confirmed the player change yet. Check Spotify before trying again.")
+        if isRequestPlayback { diagnostics.record("Playback", "Not confirmed after 6 player checks", isError: true) }
+        throw PlaybackConfirmationFailure.notObserved
     }
 
     func noteInteraction(at date: Date = Date()) { lastInteractionAt = date }
@@ -412,7 +422,7 @@ final class VibeCastStore: ObservableObject {
             await refreshAuthState()
             return
         }
-        guard authState.isLoggedIn, !isPlayerControl else { return }
+        guard authState.isLoggedIn, !isPlayerControl, !isRequestPlayback else { return }
         let generation = accountGeneration
         let refreshID = UUID()
         playbackRefreshID = refreshID
@@ -450,10 +460,10 @@ final class VibeCastStore: ObservableObject {
         persistPending()
         notifications.remove(id)
         run(prompt: recommendation.originalPrompt, route: .findPlaylist(prompt: recommendation.originalPrompt)) {
-            self.lastSpotifyAction = "Play confirmed playlist: \(recommendation.playlist.name)"
-            do { return try await self.spotify.execute(.playResolvedPlaylist(recommendation.playlist)) }
+            do { return try await self.executeRequestAction(.playResolvedPlaylist(recommendation.playlist)) }
             catch {
-                if !Task.isCancelled, let index = self.pending.firstIndex(where: { $0.id == id }) {
+                if !Task.isCancelled, !(error is PlaybackConfirmationFailure),
+                   let index = self.pending.firstIndex(where: { $0.id == id }) {
                     self.pending[index].status = .pending
                     self.persistPending()
                 }
@@ -533,6 +543,7 @@ final class VibeCastStore: ObservableObject {
             defer {
                 if self.operationID == id {
                     self.isBusy = false; self.isPlayerControl = false; self.progress = ""; self.work = nil
+                    self.isRequestPlayback = false
                     self.pendingPlayerAction = nil
                     self.pendingQueueIndex = nil
                     self.pendingHistoryIndex = nil
@@ -563,17 +574,17 @@ final class VibeCastStore: ObservableObject {
     private func execute(_ route: RequestRoute) async throws -> VibeCastResult {
         switch route {
         case .directSpotify(let action):
-            lastSpotifyAction = action.diagnosticName
-            return try await spotify.execute(action)
+            return try await executeRequestAction(action)
         case .track(let prompt):
             let phrase = MusicSearch.trackQuery(prompt)
             lastSpotifyAction = "Search track: \(phrase)"
             let candidates = try await spotify.searchTrackCandidates(query: phrase, limit: 8)
+            try Task.checkCancellation()
             guard let track = MusicSearch.matchTrack(title: phrase, artist: nil, candidates: candidates) else {
                 throw SpotifyAPIError.missingTrack
             }
             let queue = prompt.lowercased().matches(#"^(queue|add to queue)\b"#)
-            return try await spotify.execute(queue ? .queueResolvedTrack(track) : .playResolvedTrack(track))
+            return try await executeRequestAction(queue ? .queueResolvedTrack(track) : .playResolvedTrack(track))
         case .findPlaylist(let prompt):
             let query = MusicSearch.playlistQuery(prompt)
             lastSpotifyAction = "Search playlists: \(query)"
@@ -607,6 +618,114 @@ final class VibeCastStore: ObservableObject {
                                                 : "A mood, a memory, a genre. Where should we start?",
                                   source: .conversation)
         }
+    }
+
+    private func executeRequestAction(_ requested: SpotifyAction) async throws -> VibeCastResult {
+        try Task.checkCancellation()
+        let action: SpotifyAction
+        switch requested {
+        case .playTrack(let query), .queueTrack(let query):
+            requestPlaybackStage("Resolving song", action: requested)
+            let track = try await spotify.resolveTrack(query)
+            if case .queueTrack = requested { action = .queueResolvedTrack(track) }
+            else { action = .playResolvedTrack(track) }
+        default: action = requested
+        }
+        try Task.checkCancellation()
+        switch action {
+        case .playResolvedTrack(let track), .queueResolvedTrack(let track): lastResolvedItem = track.displayName
+        case .playResolvedPlaylist(let playlist): lastResolvedItem = playlist.name
+        default: break
+        }
+        // Queue acknowledgement does not mean the song is currently playing.
+        if case .queueResolvedTrack = action {
+            requestPlaybackStage("Adding to queue", action: action)
+            return try await spotify.execute(action)
+        }
+
+        isRequestPlayback = true
+        playbackRefreshID = UUID()
+        requestPlaybackStage("Checking player", action: action)
+        let before: SpotifyPlayback?
+        do { before = try await spotify.playback() }
+        catch {
+            try Task.checkCancellation()
+            diagnostics.record("Playback", "Preflight read failed: \(Self.playbackErrorSummary(error))", isError: true)
+            if error is SpotifyAPIError { throw error }
+            throw UserFacingError("Spotify's player couldn't be checked. No playback command was sent. Try again.")
+        }
+        try Task.checkCancellation()
+        let observedAt = ContinuousClock.now
+        let target: SpotifyDevice
+        if case .transferPlayback(let name) = action {
+            let devices = try await spotify.devices()
+            try Task.checkCancellation()
+            guard let device = devices.first(where: {
+                $0.id?.isEmpty == false && $0.isRestricted != true && $0.name.localizedCaseInsensitiveContains(name)
+            }) else { throw SpotifyAPIError.missingDevice }
+            target = device
+            lastResolvedItem = device.name
+        } else if let device = before?.device, device.id?.isEmpty == false {
+            guard device.isRestricted != true else { throw SpotifyAPIError.missingDevice }
+            target = device
+        } else {
+            let devices = try await spotify.devices()
+            try Task.checkCancellation()
+            let available = devices.filter { $0.id?.isEmpty == false && $0.isRestricted != true }
+            guard let device = available.first(where: \.isActive) ?? available.first else {
+                throw SpotifyAPIError.noAvailableDevices
+            }
+            target = device
+        }
+        if action == .next || action == .previous, before?.item == nil {
+            throw UserFacingError("Open Spotify and start a song before skipping or going back.")
+        }
+        try Task.checkCancellation()
+        requestPlaybackStage("Sending command", action: action)
+        let commandStartedAt = ContinuousClock.now
+        let age = observedAt.duration(to: commandStartedAt).components
+        let result: VibeCastResult
+        do { result = try await spotify.execute(action, deviceID: target.id) }
+        catch {
+            try Task.checkCancellation()
+            diagnostics.record("Playback", "Command failed: \(Self.playbackErrorSummary(error))", isError: true)
+            if let apiError = error as? SpotifyAPIError {
+                switch apiError {
+                case .requestFailed(let status, _) where status >= 500 || status == 408: break
+                default: throw error
+                }
+            }
+            throw PlaybackConfirmationFailure.uncertainCommand
+        }
+        try Task.checkCancellation()
+        requestPlaybackStage("Confirming playback", action: action)
+        try await confirmPlayback(action, before: before, commandStartedAt: commandStartedAt,
+                                  baselineAge: Double(age.seconds) + Double(age.attoseconds) / 1e18,
+                                  expectedDeviceID: target.id)
+        try Task.checkCancellation()
+        requestPlaybackStage("Confirmed", action: action)
+        return result
+    }
+
+    private func requestPlaybackStage(_ stage: String, action: SpotifyAction) {
+        let message = "\(stage): \(action.diagnosticName)"
+        lastSpotifyAction = message
+        progress = stage == "Confirmed" ? "" : "\(stage)..."
+        diagnostics.record("Playback", message)
+    }
+
+    private static func playbackErrorSummary(_ error: Error) -> String {
+        if let error = error as? URLError { return "network error \(error.code.rawValue)" }
+        if let error = error as? SpotifyAPIError {
+            switch error {
+            case .requestFailed(let status, let path): return "HTTP \(status) \(path)"
+            case .playbackRefused(let path, let reason): return "HTTP 403 \(path); reason=\(reason.rawValue)"
+            case .refused(let path, _): return "HTTP 403 \(path)"
+            default: return error.localizedDescription
+            }
+        }
+        // Do not copy raw transport/provider errors or URLs into the activity log.
+        return "Unexpected playback error"
     }
 
     private func makePlaylist(_ prompt: String) async throws -> VibeCastResult {
