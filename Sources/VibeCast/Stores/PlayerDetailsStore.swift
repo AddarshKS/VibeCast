@@ -44,7 +44,7 @@ final class PlayerDetailsStore: ObservableObject {
             queue = .loaded(items)
         } catch {
             guard generation == queueGeneration, !Task.isCancelled else { return }
-            queue = .failed(error.localizedDescription)
+            queue = .failed(RequestErrorPresentation(error).message)
         }
     }
 
@@ -80,7 +80,7 @@ final class PlayerDetailsStore: ObservableObject {
             devices = .loaded(values)
         } catch {
             guard generation == devicesGeneration, !Task.isCancelled else { return }
-            devices = .failed(error.localizedDescription)
+            devices = .failed(RequestErrorPresentation(error).message)
         }
     }
 

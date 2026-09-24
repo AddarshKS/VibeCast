@@ -214,7 +214,7 @@ struct MenuBarRootView: View {
     private var hasRequestStatus: Bool {
         store.showsRequestProgress || store.latestError != nil ||
             (store.latestResult.map { $0.source != .findPlaylist } ?? false) ||
-            store.notificationNotice != nil || (store.unfinishedPlaylist != nil && !store.isBusy)
+            store.notificationNotice != nil || ((store.unfinishedPlaylist != nil || store.pendingPlaylistCreation != nil) && !store.isBusy)
     }
     private var topHeight: CGFloat { measurements["top"] ?? density.value(250, 220) }
     private var bottomHeight: CGFloat { presentation.showsComposer ? (measurements["bottom"].flatMap { $0 > 0 ? $0 : nil } ?? 60) : 0 }

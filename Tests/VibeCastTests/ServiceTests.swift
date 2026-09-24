@@ -42,6 +42,49 @@ final class FakeAuthorization: SpotifyAuthorizing {
 
 @MainActor
 final class ServiceTests {
+    @Test func playbackDecodesOptionalContextAndConfirmsOnlyTheRequestedPlaylist() async throws {
+        let transport = StubTransport([
+            .init(status: 200, json: #"{"is_playing":true,"shuffle_state":false,"repeat_state":"off","context":{"type":"playlist","uri":"spotify:playlist:chosen"}}"#),
+            .init(status: 200, json: #"{"is_playing":true,"shuffle_state":false,"repeat_state":"off","context":null}"#),
+            .init(status: 200, json: #"{"is_playing":true,"shuffle_state":false,"repeat_state":"off"}"#)
+        ])
+        let api = SpotifyAPIClient(auth: FakeAuthorization(), transport: transport)
+        let playlist = SpotifyResolvedPlaylist(uri: "spotify:playlist:chosen", name: "Chosen", ownerName: nil, description: nil)
+        let matching = try await api.playback()
+        #expect(PlaybackConfirmation.matches(.playResolvedPlaylist(playlist), before: nil, after: matching))
+        for _ in 0..<2 {
+            let missing = try await api.playback()
+            #expect(missing?.context == nil)
+            #expect(!PlaybackConfirmation.matches(.playResolvedPlaylist(playlist), before: nil, after: missing))
+        }
+    }
+
+    @Test func namedTransferUsesPinnedDeviceIDAndPreservesStartPlayback() async throws {
+        let transport = StubTransport([
+            .init(status: 200, json: #"{"devices":[{"id":"other","name":"Phone","is_active":false},{"id":"selected","name":"Renamed Phone","is_active":false}]}"#),
+            .init(status: 204, json: "")
+        ])
+        let api = SpotifyAPIClient(auth: FakeAuthorization(), transport: transport)
+        _ = try await api.execute(.transferPlayback(deviceName: "Phone"), deviceID: "selected")
+        let requests = await transport.requests
+        #expect(requests.count == 2)
+        let data = try #require(requests.last?.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["device_ids"] as? [String] == ["selected"])
+        #expect(body["play"] as? Bool == true)
+    }
+
+    @Test func disappearedTransferTargetCannotFallBackToAnotherSameNamedDevice() async throws {
+        let transport = StubTransport([
+            .init(status: 200, json: #"{"devices":[{"id":"other","name":"Phone","is_active":false}]}"#)
+        ])
+        let api = SpotifyAPIClient(auth: FakeAuthorization(), transport: transport)
+        await #expect(throws: SpotifyAPIError.self) {
+            _ = try await api.execute(.transferPlayback(deviceName: "Phone"), deviceID: "selected")
+        }
+        #expect(await transport.requests.count == 1)
+    }
+
     @Test func testCurrentPlaylistEndpointsPrivateAndIdempotentWrite() async throws {
         let transport = StubTransport([
             .init(status: 201, json: #"{"id":"playlistID","uri":"spotify:playlist:playlistID","name":"Night Drive"}"#),

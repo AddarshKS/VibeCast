@@ -8,7 +8,7 @@ struct DeveloperConsole: View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
             LabeledContent("ChatGPT", value: subscription.account == nil ? "Disconnected" : "Connected")
-            if let error = subscription.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error = subscription.error { Text(DiagnosticLog.redacted(error)).foregroundStyle(.orange).textSelection(.enabled) }
             HStack {
                 Text("ACTIVITY LOG").fontWeight(.semibold)
                 Spacer()

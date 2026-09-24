@@ -4,7 +4,7 @@ A native macOS menu bar companion for Spotify. Find a playlist for a mood, confi
 
 **Status: local subscription beta, not a public production service.** The Mac app supports each tester's own ChatGPT subscription through local Codex. A paid API or hosted AI service is not required for this beta. Spotify access approval, Apple signing, and live account acceptance tests remain necessary before distributing a public release.
 
-**September 16, 2026 UI freeze:** the owner has approved the compact player, immersive miniplayer, lyrics/queue modes, and normal player controls. Preserve this UI checkpoint while reviewing the stacked PR and completing the next phase: request coverage, live playlist creation, friendlier errors, returning to suggestions after completed/declined requests, and developer-view acceptance. These request workflows are not declared complete. See [current status and next steps](docs/PROJECT_STATUS.md).
+**Approved player UI preserved:** the owner has accepted the compact player, immersive miniplayer, lyrics/queue modes, and normal controls. Request interpretation, contextual clarification, playlist recovery/readback, error dismissal, and developer evidence are now implemented on the request branch. Live acceptance is pending: use the [owner QA checklist](docs/REQUEST_READINESS_QA.md) and [current status](docs/PROJECT_STATUS.md). Existing Spotify sessions must reconnect for private playlist read/recovery access.
 
 ## The experience
 

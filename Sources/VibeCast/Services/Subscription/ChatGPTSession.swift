@@ -97,7 +97,7 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
             try await loadAccount()
             error = nil
         } catch is CancellationError { return }
-        catch { self.error = error.localizedDescription }
+        catch { present(error) }
     }
 
     func signIn() {
@@ -128,7 +128,7 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
                 try await loadAccount()
                 guard account != nil else { throw UserFacingError("ChatGPT sign-in didn't finish. Please try again.") }
             } catch is CancellationError { return }
-            catch { self.error = error.localizedDescription }
+            catch { present(error) }
         }
     }
 
@@ -152,7 +152,7 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
                 hasCheckedAccount = true
                 usage = nil
                 models = []
-            } catch { self.error = error.localizedDescription }
+            } catch { present(error) }
         }
     }
 
@@ -210,9 +210,15 @@ final class ChatGPTSession: ObservableObject, PlaylistPlanning {
             try Task.checkCancellation()
             return try JSONDecoder().decode(PlaylistPlan.self, from: Data(text.utf8)).validated()
         } catch {
-            if !(error is CancellationError) { self.error = error.localizedDescription }
+            if !(error is CancellationError) { present(error) }
             throw error
         }
+    }
+
+    private func present(_ error: Error) {
+        let feedback = RequestErrorPresentation(error, source: .chatGPT)
+        diagnostics.record("ChatGPT", feedback.diagnostic, isError: true)
+        self.error = feedback.message
     }
 
     static func isTrustedLoginURL(_ url: URL) -> Bool {

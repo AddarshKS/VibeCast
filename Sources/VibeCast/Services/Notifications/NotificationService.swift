@@ -26,10 +26,14 @@ struct NotificationService: Notifying {
     }
 
     func recommend(_ recommendation: PendingPlaylistRecommendation) async throws {
+        try Task.checkCancellation()
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
+        try Task.checkCancellation()
         if settings.authorizationStatus == .notDetermined {
-            guard try await center.requestAuthorization(options: [.alert, .sound]) else {
+            let authorized = try await center.requestAuthorization(options: [.alert, .sound])
+            try Task.checkCancellation()
+            guard authorized else {
                 throw UserFacingError("Notifications are off. Your playlist is ready here.")
             }
         } else if settings.authorizationStatus == .denied {
@@ -41,7 +45,19 @@ struct NotificationService: Notifying {
         content.sound = .default
         content.categoryIdentifier = Self.category
         content.userInfo = [Self.recommendationKey: recommendation.id.uuidString]
-        try await center.add(UNNotificationRequest(identifier: recommendation.id.uuidString, content: content, trigger: nil))
+        do {
+            try Task.checkCancellation()
+            try await center.add(UNNotificationRequest(identifier: recommendation.id.uuidString, content: content, trigger: nil))
+            try Task.checkCancellation()
+        } catch {
+            // macOS notification delivery is not cancelled automatically with the
+            // request task. A late completion must not reappear after sign-out.
+            if Task.isCancelled || error is CancellationError {
+                remove(recommendation.id)
+                throw CancellationError()
+            }
+            throw error
+        }
     }
 
     func remove(_ id: UUID) {

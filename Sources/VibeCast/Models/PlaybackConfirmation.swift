@@ -3,8 +3,9 @@ import Foundation
 enum PlaybackConfirmation {
     static func matches(_ action: SpotifyAction, before: SpotifyPlayback?, after: SpotifyPlayback?,
                         elapsedSinceCommand: TimeInterval = 0, baselineAge: TimeInterval = 0,
-                        elapsedBeforeRead: TimeInterval? = nil) -> Bool {
+                        elapsedBeforeRead: TimeInterval? = nil, expectedDeviceID: String? = nil) -> Bool {
         guard let after else { return false }
+        if let expectedDeviceID, after.device?.id != expectedDeviceID { return false }
         let readEnd = max(0, elapsedSinceCommand) * 1000
         let readStart = min(readEnd, max(0, elapsedBeforeRead ?? elapsedSinceCommand) * 1000)
         // A player response may describe any instant during the read, not its receipt time.
@@ -17,7 +18,7 @@ enum PlaybackConfirmation {
         switch action {
         case .transferToDevice, .transferPlayback: break
         default:
-            if let deviceID = before?.device?.id, after.device?.id != deviceID { return false }
+            if expectedDeviceID == nil, let deviceID = before?.device?.id, after.device?.id != deviceID { return false }
         }
         switch action {
         case .shuffle(let enabled): return after.shuffleState == enabled
@@ -36,6 +37,8 @@ enum PlaybackConfirmation {
         case .advanceQueue(let uri, let id), .rewindQueue(let uri, let id):
             return after.isPlaying && after.item?.uri == uri && before?.item?.uri != uri && after.device?.id == id
         case .playResolvedTrack(let track): return after.isPlaying && after.item?.uri == track.uri
+        case .playResolvedPlaylist(let playlist):
+            return after.isPlaying && after.context?.type == "playlist" && after.context?.uri == playlist.uri
         case .next, .previous:
             guard let uri = after.item?.uri else { return false }
             if uri != before?.item?.uri { return true }
@@ -45,8 +48,26 @@ enum PlaybackConfirmation {
             let restartWindow = (after.isPlaying ? readEnd : 0) + 1500
             return position >= 0 && Double(position) <= restartWindow && Double(position) < continuing.lowerBound
         case .transferToDevice(let device): return after.device?.id == device.id && device.id != nil
-        case .transferPlayback(let name): return after.device?.name.localizedCaseInsensitiveContains(name) == true
+        case .transferPlayback(let name):
+            return after.isPlaying && (expectedDeviceID != nil || after.device?.name.localizedCaseInsensitiveContains(name) == true)
         default: return false
+        }
+    }
+}
+
+// These outcomes must not re-arm a consumed recommendation: Spotify may already
+// have applied the command. Confirmation retries only read the player.
+enum PlaybackConfirmationFailure: LocalizedError {
+    case uncertainCommand, unavailable, notObserved
+
+    var errorDescription: String? {
+        switch self {
+        case .uncertainCommand:
+            "Spotify may have received the command, but its outcome is uncertain. Check Spotify before trying again."
+        case .unavailable:
+            "The command was sent, but Spotify's player couldn't be checked. Check Spotify before trying again."
+        case .notObserved:
+            "Spotify hasn't confirmed the player change yet. Check Spotify before trying again."
         }
     }
 }
